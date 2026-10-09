@@ -157,7 +157,13 @@ not generate.
 | `settings` | TOML | `{ }` | The relay configuration, rendered verbatim. |
 | `enrollmentTokenFile` | path or null | `null` | Relay enrollment token, loaded as the `enrollment-token` credential. |
 | `openFirewall` | bool | `false` | Open `settings.relay.port_range` (UDP). |
-| `logLevel` | `error`…`trace` | `settings.log.level` | Passed as `WGMESH__LOG__LEVEL`. |
+
+There is no `logLevel` option here, unlike the agent and the coordinator. The
+relay's TOML schema has no `[log]` table (`docs/blueprint.md` §5, and
+`RelaySettings` in `wgmesh-config`), and the settings types reject unknown keys,
+so a `WGMESH__LOG__LEVEL` pointed at `log.level` would make the relay refuse its
+own configuration rather than set its verbosity. The option comes back when the
+relay's schema has a table to read it from — the module does not invent one.
 
 Installed as `systemd.services.wgmesh-relayd`, running
 `wgmesh-relayd run --config /etc/wgmesh/relay.toml`, with
@@ -253,6 +259,12 @@ networking.firewall.checkReversePath = "loose"; # strict rp_filter drops tunnel 
 they are written out anyway: the first is only honoured by the nftables firewall
 backend, and the second is easy to tighten globally.
 
+With `forwarding.firewall = "manage"` the module adds the `inet wgmesh-forward`
+table, which accepts forwarding between the tunnel interface and
+`trustedInterfaces`. Its set elements are comma separated — nftables rejects
+`{ eth0 eth1 }` — and the module asserts that `trustedInterfaces` is not empty,
+because `{ }` is a syntax error that would take the whole ruleset down with it.
+
 ## Tests
 
 The end-to-end tests are NixOS VM tests, so they need a machine that can run
@@ -264,6 +276,11 @@ $ nix build .#checks.x86_64-linux.relay-unit
 $ nix build .#checks.x86_64-linux.forwarding
 $ nix flake check                     # also runs the dependency check
 ```
+
+`deps` needs nothing but a Nix store; the three VM tests need `/dev/kvm`. The
+flake tracks `github:NixOS/nixpkgs/nixos-unstable` and the repository does not
+commit a `flake.lock`, so the first run fetches whatever the channel points at
+that day -- run `nix flake lock` once and commit the lock file to pin it.
 
 | Check | What it stands up | What it asserts |
 |---|---|---|
