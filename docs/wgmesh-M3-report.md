@@ -7,6 +7,7 @@ The thread step **"IPv6·LAN·UPnP 후보와 대칭 NAT 대응, M3 보고서"**,
 | Where | `mincomk/wgmesh`, PR **#22** → `main`, branch `m3/candidate-classes-and-symmetric-nat` |
 | Base | `main` at the time of writing (the config/state/secrets and NixOS-module merges are in it) |
 | Local | `cargo test --workspace` → **160 tests, 160 passed**; clippy, `check-deps`, `check-style`, `fmt --check` all clean |
+| CI | **green** — run `37933297707` on `be66e3d`: `fmt, clippy, test, checks`, 45 s |
 | Crate surface | `wgmesh-core` (the pure half), `wgmesh-ports` (two new ports), `wgmesh-app` (discovery and the traversal round), `wgmesh-config` (the settings translation) |
 
 Everything below was run on this Computer. Nothing is asserted from reading the design; where something is
@@ -116,12 +117,14 @@ Honest bookkeeping, because it changes how much the checks above are worth:
   simulation. Every kernel and network claim above is over the fakes; that is a property of the environment,
   not a shortcut.
 - The machine **restarted several times during this step** and its `/home` volume filled to 100 %, which
-  killed a build mid-link and lost a working tree once. The final state — commit `563add5` on the branch,
-  PR #22 — was re-created and re-run after the last restart: **160 tests passed, clippy clean,
-  `check-deps` and `check-style` clean** on that tree. As part of recovering space, the stale `target/`
-  build caches of five *finished* jobs in this thread were deleted; no sources and no git state were touched.
-- CI on PR #22 is the first run of the same checks in a clean, stable environment. Where CI and this report
-  disagree, CI is right.
+  killed a build mid-link. One recovery step also cost an uncommitted working tree: edits made after the
+  first commit were discarded by the `git checkout` used to undo a mutation check, before they had been
+  committed. Everything was re-applied from the tested state, and the lesson belongs to the workflow rather
+  than to the code — commit before mutating.
+- **CI on PR #22 passed** — run `37933297707` on `be66e3d`, the job "fmt, clippy, test, checks", 45 s. That
+  is the same four checks re-run at exactly the pushed commit in a clean environment, and it is what stands
+  where this machine's numbers were taken with a full volume and a cargo package cache shared with other
+  jobs.
 
 ## 8. The next phase: field verification
 
