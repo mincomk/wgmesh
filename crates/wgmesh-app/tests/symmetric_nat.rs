@@ -1,10 +1,12 @@
 #![allow(clippy::expect_used)]
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use wgmesh_app::agent::traversal::{PeerTraversal, TraversalRunner};
 use wgmesh_core::{
-    DeviceId, Effect, Endpoint, Millis, Path, Phase, PublicKey, Traversal, TraversalConfig,
+    Allowed, Change, DeviceId, DiscoveryPolicy, DiscoverySources, Effect, Endpoint, Millis, Path,
+    Phase, PublicKey, Traversal, TraversalConfig,
 };
 use wgmesh_ports::Observation;
 use wgmesh_testkit::{FakeCoordinator, FakeWireGuard, NatProfile, NatSim, VirtualClock, block_on};
@@ -16,15 +18,24 @@ fn sip(port: u16) -> Endpoint {
     ))
 }
 
+fn lan(port: u16) -> Endpoint {
+    Endpoint::new(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)),
+        port,
+    ))
+}
+
 const RELAY_PORT: u16 = 51901;
 const PEER_PORT: u16 = 41287;
 const RTT_MS: u64 = 200;
 const KEEPALIVE_SECS: u64 = 25;
 const SYNC_SECS: u64 = 30;
+const TUNNEL_IP: Allowed = Allowed::V4([10, 77, 0, 2], 32);
+const PEER_KEY: PublicKey = PublicKey::from_bytes([7; 32]);
 
-/// The outside world the agent is embedded in: a relay slot to use, a peer
-/// whose external mapping the relay can observe, and a NAT that decides whether
-/// a direct attempt actually arrives.
+/// The outside world the agent is embedded in: a relay slot to use, a peer whose
+/// external mapping the relay can observe, and a NAT that decides whether a
+/// direct attempt actually arrives.
 struct Harness {
     clock: VirtualClock,
     nat: NatSim,
@@ -60,7 +71,7 @@ impl Harness {
             TraversalConfig::default(),
             keepalive,
         );
-        let peer = PeerTraversal::new(DeviceId(2), PublicKey::from_bytes([7; 32]), runner.config());
+        let peer = PeerTraversal::new(DeviceId(2), PEER_KEY, vec![TUNNEL_IP]);
 
         Self {
             clock,
@@ -89,9 +100,14 @@ impl Harness {
         if !effects.is_empty() {
             self.log.push((now, effects));
         }
-        // The relay sees the peer's mapping only while the pair is actually
-        // talking through it. This is the round trip that heals a cold path.
-        if self.wireguard.current_endpoint() == Some(self.relay) {
+        // The relay reports on the sync cadence, and only while the pair is
+        // actually talking through it. Reporting on every tick would hand the
+        // agent a fresh observation for free and the "heals inside one round
+        // trip" claim would be a property of this harness rather than of the
+        // agent.
+        if self.wireguard.current_endpoint() == Some(self.relay)
+            && now.as_millis() % (SYNC_SECS * 1000) == 0
+        {
             self.coordinator
                 .observe(Observation::new(self.peer_endpoint, now));
         }
@@ -102,6 +118,11 @@ impl Harness {
             self.clock.advance(Duration::from_secs(1));
             self.step();
         }
+    }
+
+    fn offer(&mut self, sources: &DiscoverySources, policy: DiscoveryPolicy) -> usize {
+        self.runner
+            .offer_candidates(&mut self.peer, sources, policy)
     }
 
     fn punch_times(&self) -> Vec<Millis> {
@@ -121,6 +142,13 @@ fn next_attempt(state: &Traversal) -> Millis {
     match state.phase {
         Phase::Idle { next_attempt } => next_attempt,
         Phase::Probing { .. } => panic!("expected the traversal to be waiting, not probing"),
+    }
+}
+
+fn lan_sources(endpoint: Endpoint) -> DiscoverySources {
+    DiscoverySources {
+        lan: vec![(endpoint, Millis::from_secs(1))],
+        ..DiscoverySources::default()
     }
 }
 
@@ -182,6 +210,37 @@ fn a_symmetric_nat_falls_back_to_the_relay_after_the_window_and_then_backs_off()
 }
 
 #[test]
+fn moving_the_endpoint_leaves_the_allowed_ips_and_the_key_alone() {
+    let mut harness = Harness::new(NatProfile::Symmetric);
+    harness.start();
+    harness.run_until(Millis::from_secs(7));
+
+    let updates: Vec<_> = harness
+        .wireguard
+        .applied()
+        .into_iter()
+        .filter_map(|change| match change {
+            Change::Update(spec) => Some(spec),
+            Change::Add(spec) => Some(spec),
+            Change::Remove(_) => None,
+        })
+        .collect();
+
+    assert!(!updates.is_empty());
+    assert!(
+        updates.iter().all(|spec| spec.allowed == vec![TUNNEL_IP]),
+        "the traversal only moves the endpoint; the AllowedIPs that program_allowed_ips assigned \
+         have to survive every re-pin"
+    );
+    assert!(updates.iter().all(|spec| spec.key == PEER_KEY));
+    assert!(
+        updates
+            .iter()
+            .all(|spec| spec.keepalive == Some(Duration::from_secs(KEEPALIVE_SECS)))
+    );
+}
+
+#[test]
 fn a_cone_nat_promotes_the_direct_path_and_then_leaves_it_alone() {
     let mut harness = Harness::new(NatProfile::Cone);
     harness.start();
@@ -216,11 +275,19 @@ fn a_direct_path_that_goes_quiet_is_detected_and_heals_over_the_relay_within_one
     assert_eq!(harness.peer.state.path, Path::Direct);
 
     // The direct path stops carrying traffic. Nothing announces it; the
-    // handshakes simply stop arriving.
+    // handshakes simply stop arriving. A live-but-idle path looks the same for
+    // the first two minutes, so the agent must wait out the teardown window
+    // before calling it dead.
     harness.nat.break_direct();
-    harness.run_until(Millis::from_secs(78));
+    harness.run_until(Millis::from_secs(182));
+    assert_eq!(
+        harness.peer.state.path,
+        Path::Direct,
+        "an idle path inside RejectAfterTime must not be bounced onto the relay"
+    );
 
-    let degraded_at = Millis::from_secs(78);
+    harness.run_until(Millis::from_secs(183));
+    let degraded_at = Millis::from_secs(183);
     assert_eq!(
         harness.peer.state.path,
         Path::Relayed,
@@ -234,7 +301,7 @@ fn a_direct_path_that_goes_quiet_is_detected_and_heals_over_the_relay_within_one
         degraded_at.plus(Duration::from_secs(30))
     );
 
-    // One round trip would be 30s; the connection is already back well inside
+    // One round trip is `sync_interval_secs`; the connection is back well inside
     // it, and the relay has re-observed the peer in the meantime.
     harness.run_until(degraded_at.plus(Duration::from_secs(SYNC_SECS - 1)));
 
@@ -254,11 +321,54 @@ fn a_direct_path_that_goes_quiet_is_detected_and_heals_over_the_relay_within_one
         fresh >= 1,
         "the relay slot must be re-observed within one round trip, not eventually"
     );
-    assert!(
-        harness
-            .coordinator
-            .observations()
-            .iter()
-            .any(|observation| observation.seen_at >= degraded_at)
+}
+
+#[test]
+fn a_lan_candidate_outranks_the_relay_observed_one_and_reaches_the_endpoint() {
+    // The peer is behind a symmetric NAT, so the address the relay observed is
+    // useless. The same-LAN address is not, and the ranking has to prefer it.
+    let mut harness = Harness::new(NatProfile::Symmetric);
+    let lan_endpoint = lan(PEER_PORT);
+    harness.nat.allow_through(lan_endpoint);
+    harness.start();
+
+    assert_eq!(
+        harness.offer(&lan_sources(lan_endpoint), DiscoveryPolicy::default()),
+        1
     );
+    harness.run_until(Millis::from_secs(3));
+
+    assert_eq!(
+        harness.peer.state.active,
+        Some(lan_endpoint),
+        "a Lan candidate must win over the relay-observed one"
+    );
+    assert_eq!(harness.peer.state.path, Path::Direct);
+    assert_eq!(harness.wireguard.current_endpoint(), Some(lan_endpoint));
+}
+
+#[test]
+fn turning_lan_candidates_off_leaves_the_peer_on_the_relay() {
+    let mut harness = Harness::new(NatProfile::Symmetric);
+    let lan_endpoint = lan(PEER_PORT);
+    // Reachable, so the only thing that can keep the agent off it is the policy.
+    harness.nat.allow_through(lan_endpoint);
+    harness.start();
+
+    let policy = DiscoveryPolicy {
+        lan_candidates: false,
+        ipv6: true,
+    };
+    assert_eq!(harness.offer(&lan_sources(lan_endpoint), policy), 0);
+
+    harness.run_until(Millis::from_secs(3));
+    assert_eq!(
+        harness.wireguard.current_endpoint(),
+        Some(harness.peer_endpoint),
+        "with the Lan class switched off the agent falls back to the observed endpoint"
+    );
+
+    harness.run_until(Millis::from_secs(7));
+    assert_eq!(harness.peer.state.path, Path::Relayed);
+    assert_eq!(harness.wireguard.current_endpoint(), Some(harness.relay));
 }

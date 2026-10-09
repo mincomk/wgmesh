@@ -11,7 +11,7 @@
 - 대칭 NAT는 **폴백 + 백오프**로 처리한다. 통합 테스트가 직접 시도 실패 → `punch_window` 뒤 릴레이 복귀 → 30초 → 2분 → 10분 백오프를 단정한다.
 - 직접 경로가 나중에 죽으면 에이전트가 핸드셰이크 부재를 `Event::Degraded`로 바꿔 릴레이 슬롯으로 복귀하고, 슬롯 재관찰로 **한 왕복 안에** 자가치유된다.
 - **대칭 NAT 포트 예측(birthday attack)은 이번 범위 밖이다** (§7).
-- 이 Computer에서 돌아간 테스트: `cargo test --workspace` 50개 (core 31 · config 9 · app 단위 7 · 통합 3), `cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask check-deps`, `cargo xtask check-style` 전부 통과.
+- 이 Computer에서 돌아간 테스트: `cargo test --workspace` **53개** (core 30 · config 9 · app 단위 8 · 통합 6), `cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask check-deps`, `cargo xtask check-style` 전부 통과.
 
 ## 1. 저장소에 더한 것
 
@@ -64,13 +64,23 @@ assert_eq!(harness.wireguard.current_endpoint(), Some(harness.peer_endpoint),
 
 ### 2.2 참조 코어에서 고친 것 — 릴레이 핸드셰이크가 백오프를 지우고 있었다
 
-**이 단계에서 참조 코어의 결함을 하나 찾아 고쳤다.** 원래 `Event::Handshake`는 `attempts = 0`을 무조건 실행했다. 순수 테스트는 핸드셰이크 이벤트를 넣지 않으므로 통과했지만, 실제 시스템에서는 `persistent-keepalive`가 릴레이 경로에서 계속 핸드셰이크를 만들고, 그것이 매번 후퇴 카운터를 0으로 되돌린다. 결과적으로 대칭 NAT에서 백오프는 30초에서 더 자라지 못하고, 2분·10분 단계는 영원히 도달하지 않는다 — §4.10이 요구하는 것과 정반대다.
+**이 단계에서 참조 코어의 결함을 하나 찾아 고쳤다.** 원래 `Event::Handshake`는 `attempts = 0`을 무조건 실행했다. 순수 테스트는 핸드셰이크 이벤트를 넣지 않으므로 통과했지만, 실제 시스템에서는 `persistent-keepalive`가 릴레이 경로에서 계속 핸드셰이크를 만들고, 그것이 매번 후퇴 카운터를 0으로 되돌린다. 게다가 대기 시각(`next_attempt`)까지 핸드셰이크 시각으로 덮어써서, 릴레이 keepalive 한 번이 곧바로 다음 직접 시도를 무장시켰다(리뷰의 mutation A가 이 효과를 수치로 보였다: cone 테스트의 `next_attempt`가 2초에서 1.2초로 움직인다). 결과적으로 대칭 NAT에서 백오프는 30초에서 더 자라지 못하고, 2분·10분 단계는 영원히 도달하지 않는다 — §4.10이 요구하는 것과 정반대다.
 
 고친 뒤의 규칙:
 
 > **직접 엔드포인트로 들어온 핸드셰이크만** 직접 경로가 살아 있다는 증거다. 릴레이 핸드셰이크는 keepalive가 일한 결과일 뿐이므로 경로를 `Relayed`로 표시할 뿐, 후퇴 카운터와 대기 시각은 건드리지 않는다.
 
 `wgmesh-core::tests::a_relay_handshake_does_not_clear_the_retreat_counter`가 이 규칙을 고정한다. 커널 WireGuard를 띄워 본 것이 아니라 상태기계와 모델의 모순을 찾아낸 것이므로, **실기에서 keepalive 주기(25초)와 재키 주기(약 2분)가 이 가정과 맞는지 확인해야 한다** (§6).
+
+### 2.3 후보를 실제 선택까지 잇는다 — `offer_candidates`
+
+후보 정렬이 순수 함수로만 남아 있으면 아무도 부르지 않는다. `Event::Observed`가 `Traversal`의 후보 목록으로 들어가는 유일한 문인데, 릴레이 관측만 그 문을 두드리고 있었다. 그래서 `TraversalRunner::offer_candidates(sources, policy)`를 두어 **이 노드에서 파생된 후보(LAN·IPv6·포트 매핑)**도 같은 문으로 넣는다. 이 배선이 없으면 `Lan`·`Ipv6` 후보는 엔드포인트를 고르는 코드(`step()`의 `Tick`)에 도달할 수 없다.
+
+`a_lan_candidate_outranks_the_relay_observed_one_and_reaches_the_endpoint`가 이를 단정한다 — 대칭 NAT 뒤의 피어에서 릴레이 관측 주소는 쓸모없고, 같은 LAN 주소는 쓸모 있다. `turning_lan_candidates_off_leaves_the_peer_on_the_relay`는 같은 배선에서 정책 스위치를 끄면 그 후보가 아예 들어오지 않는 것을 본다.
+
+### 2.4 엔드포인트만 옮긴다 — AllowedIPs는 들고 간다
+
+`Effect::SetPeerEndpoint`는 `Change::Update(PeerSpec)`으로 적용되는데, `Change::Update`는 **피어 전체**다. 초기 구현은 `allowed: Vec::new()`로 스펙을 새로 만들어, 충실한 어댑터라면 `program_allowed_ips`가 설치한 cryptokey routing을 지웠을 것이다(현재는 실제 WireGuard 어댑터가 없고 `FakeWireGuard`가 `allowed`를 보지 않아 드러나지 않는다). 이제 AllowedIPs·키·keepalive는 `PeerTraversal`이 그대로 들고 다니고 트래버설은 엔드포인트만 바꾼다. `moving_the_endpoint_leaves_the_allowed_ips_and_the_key_alone`이 되돌림을 막는다.
 
 ## 3. 직접 경로 생존 감지와 자가치유
 
@@ -80,7 +90,7 @@ assert_eq!(harness.wireguard.current_endpoint(), Some(harness.peer_endpoint),
 pub fn degraded(path: Path, last_handshake: Option<Millis>, now: Millis, keepalive: Duration) -> bool
 ```
 
-`path == Direct`이고 마지막 핸드셰이크가 **keepalive의 3배**보다 오래됐으면 죽은 것으로 본다. 살아 있는 경로는 건드리지 않는다 — 잘 돌아가는 직접 경로를 주기적으로 재시도해서 스스로 끊는 것이 참조 코어가 이미 겪은 실수였고, 그 규칙은 그대로 유지된다.
+`path == Direct`이고 마지막 핸드셰이크가 `max(keepalive × 3, 180초)`보다 오래됐으면 죽은 것으로 본다. 아래 180초는 wireguard-go의 `RejectAfterTime`이다 — 살아 있지만 조용한 직접 경로는 `RekeyAfterTime`(약 2분)마다만 재키하고, `persistent-keepalive`는 인증된 **빈 데이터 패킷**이라 핸드셰이크 시각을 갱신하지 않는다. 임계값을 keepalive 세 번(기본값에서 75초)으로 두면 멀쩡한 경로를 죽었다고 판단해 몇 분마다 릴레이로 튕긴다. 살아 있는 경로는 건드리지 않는다 — 잘 돌아가는 직접 경로를 주기적으로 재시도해서 스스로 끊는 것이 참조 코어가 이미 겪은 실수였고, 그 규칙은 그대로 유지된다.
 
 `Degraded`가 들어오면 상태기계는 후퇴 카운터를 올리고 엔드포인트를 릴레이 슬롯으로 되돌린 뒤 다음 시도를 30초 뒤로 미룬다. 그 뒤 릴레이 경로로 트래픽이 다시 흐르면 릴레이가 피어의 매핑을 **재관찰**하고, 에이전트는 다음 라운드에 그 값을 받아 후보를 갱신한다. 통합 테스트는 자가치유가 **한 왕복(30초) 안에** 일어나는지를 단정한다.
 
@@ -96,13 +106,17 @@ pub fn degraded(path: Path, last_handshake: Option<Millis>, now: Millis, keepali
 | `wgmesh-core::candidates::tests::both_local_classes_off_leaves_the_relay_as_the_best_candidate` | 둘 다 끄면 릴레이가 최선 |
 | `wgmesh-app::agent::discovery::tests::upnp_off_never_touches_the_port_mapper` | **포트 매퍼 호출 0회**, Mapping 후보 없음 |
 | `wgmesh-app::agent::discovery::tests::upnp_on_asks_the_gateway_once_and_keeps_the_mapped_port` | 켜면 1회 호출, 매핑이 후보로 들어옴 |
-| `wgmesh-app::agent::traversal::tests::a_direct_path_without_handshakes_for_three_keepalives_is_degraded` | 핸드셰이크 부재 → Degraded 판정 |
+| `wgmesh-app::agent::traversal::tests::a_direct_path_without_handshakes_past_the_teardown_window_is_degraded` | 핸드셰이크 부재가 `RejectAfterTime`을 넘으면 Degraded |
+| `wgmesh-app::agent::traversal::tests::an_idle_direct_path_inside_the_rekey_window_is_not_degraded` | 조용하지만 살아 있는 경로는 Degraded가 아니다 (keepalive × 3 = 75초로는 부족하다) |
 | `wgmesh-app::agent::traversal::tests::a_relayed_path_is_never_degraded` | 릴레이 경로는 Degraded로 보지 않음 |
 | `wgmesh-app::agent::traversal::tests::a_direct_path_that_keeps_handshaking_is_healthy` | 살아 있는 경로는 건드리지 않음 |
 | `wgmesh-app::tests::symmetric_nat::a_symmetric_nat_falls_back_to_the_relay_after_the_window_and_then_backs_off` | 직접 시도 실패 → 창 뒤 릴레이 복귀 → 백오프 30초·2분·10분 |
 | `wgmesh-app::tests::symmetric_nat::a_cone_nat_promotes_the_direct_path_and_then_leaves_it_alone` | 성공한 직접 경로는 600초 동안 재시도 없음 |
 | `wgmesh-app::tests::symmetric_nat::a_direct_path_that_goes_quiet_is_detected_and_heals_over_the_relay_within_one_round_trip` | 직접 경로 사망 감지 → 릴레이 복귀 → 1왕복 자가치유 |
 | `wgmesh-core::tests::a_relay_handshake_does_not_clear_the_retreat_counter` | §2.2의 수정 규칙 |
+| `wgmesh-app::tests::symmetric_nat::moving_the_endpoint_leaves_the_allowed_ips_and_the_key_alone` | §2.4 — 엔드포인트 재고정이 AllowedIPs·키·keepalive를 건드리지 않는다 |
+| `wgmesh-app::tests::symmetric_nat::a_lan_candidate_outranks_the_relay_observed_one_and_reaches_the_endpoint` | §2.3 — `Lan` 후보가 실제로 선택된다 |
+| `wgmesh-app::tests::symmetric_nat::turning_lan_candidates_off_leaves_the_peer_on_the_relay` | §2.3 — 스위치를 끄면 그 후보가 선택 단계에 도달하지 않는다 |
 | `wgmesh-config::tests::upnp_is_off_unless_it_is_asked_for` | `upnp` 기본값 `false` |
 | `wgmesh-config::tests::the_defaults_are_the_documented_ones` | 기본값이 청사진 §5와 일치 |
 | `wgmesh-config::tests::a_punch_window_that_outlives_the_keepalive_is_rejected` | 창 < keepalive 불변식 |
@@ -121,7 +135,7 @@ pub fn degraded(path: Path, last_handshake: Option<Millis>, now: Millis, keepali
 | **IPv6 경로** | 후보 생성과 정책은 검증됐지만, 실제 IPv6 글로벌 주소를 수집하는 어댑터(`InterfaceInventory`)와 그 위의 직접 연결은 실측이 아니다 |
 | **릴레이의 mac1/receiver_index 라우팅** | 단계 15의 범위다. 이 단계의 릴레이는 슬롯 포트로 송신자를 식별하는 모델을 쓴다 |
 | **NixOS 모듈·flake** | `nix`도 `/dev/kvm`도 없어 평가되지 않는다 |
-| **`persistent-keepalive` 실측** | §3의 "keepalive 3회 부재" 임계값은 모델 위에서 정한 값이다. 실제 재키 주기(약 2분)와의 관계는 실기에서 확인해야 한다 |
+| **`persistent-keepalive` / 재키 실측** | §3의 임계값은 `RejectAfterTime = 180초`를 근거로 정했지만, 실제 하드웨어에서 keepalive가 핸드셰이크 시각을 정말로 갱신하지 않는지, 재키 주기가 가정한 2분인지는 확인하지 않았다. 통합 테스트의 `FakeWireGuard`는 keepalive가 핸드셰이크를 만든다고 모델하므로 **이 가정을 볼 수 있는 테스트가 아직 없다** |
 
 ## 6. 실기 검증 계획 (다음 국면 인계)
 
@@ -138,9 +152,10 @@ pub fn degraded(path: Path, last_handshake: Option<Millis>, now: Millis, keepali
 3. **cone/restricted에서 직접 승격.** `punch_delay` 뒤 직접 시도가 성공하고, 이후 릴레이 트래픽이 실제로 0에 가까워지는지.
 4. **대칭 NAT에서 폴백.** 직접 시도 실패 후 **몇 초 안에** 릴레이 경로가 돌아오는지. 여기서 "5초 창 + 즉시 복귀"가 실제인지 확인한다.
 5. **백오프가 자란다.** 대칭 NAT 노드에서 시도 간격이 30초 → 2분 → 10분으로 늘어나는지, 그리고 **keepalive가 후퇴 카운터를 지우지 않는지**(§2.2의 수정이 실제 커널 동작과 맞는지). 이 항목이 이번 단계에서 가장 위험이 큰 가정이다.
-6. **직접 경로 사망 → 자가치유.** 직접 경로가 뚫린 노드에서 경로를 끊고(예: 중간 NAT 재시작·`iptables` drop), Degraded 감지까지 걸리는 시간과 복귀까지의 시간을 잰다.
-7. **IPv6 노드.** 릴레이를 거치지 않고 붙는지, IPv4 후보와 경쟁할 때 IPv6가 선택되는지.
-8. **UPnP를 켠 경우.** 게이트웨이가 응답하는 환경에서 매핑이 후보로 들어오고, 응답하지 않는 환경에서 **라운드가 실패하는지**(지금은 실패가 정상 동작으로 정의돼 있다 — §5 참고).
+6. **Degraded 임계값이 오탐하지 않는가.** 직접 경로를 조용하게(트래픽 없이) 두고 `wg show dump`의 `latest handshake`가 실제로 몇 초마다 움직이는지 잰다. 75초로는 부족하고 180초가 맞는지, 아니면 수신 바이트 변화를 생존 신호로 써야 하는지를 여기서 정한다.
+7. **직접 경로 사망 → 자가치유.** 직접 경로가 뚫린 노드에서 경로를 끊고(예: 중간 NAT 재시작·`iptables` drop), Degraded 감지까지 걸리는 시간과 복귀까지의 시간을 잰다.
+8. **IPv6 노드.** 릴레이를 거치지 않고 붙는지, IPv4 후보와 경쟁할 때 IPv6가 선택되는지.
+9. **UPnP를 켠 경우.** 게이트웨이가 응답하는 환경에서 매핑이 후보로 들어오고, 응답하지 않는 환경에서 **라운드가 실패하는지**(지금은 실패가 정상 동작으로 정의돼 있다 — §5 참고).
 
 ### 6.3 합격 기준
 
@@ -161,4 +176,14 @@ pub fn degraded(path: Path, last_handshake: Option<Millis>, now: Millis, keepali
 
 - **`wgmesh-testkit` crate 추가.** 청사진의 crate 목록에 없던 crate다. 대안은 fake를 `wgmesh-app`의 공개 모듈로 두는 것이었지만, 그러면 테스트 전용 코드가 제품 crate에 실린다. 의존 표에 한 줄을 더하는 쪽이 더 싸다고 판단했다.
 - **`Event::Handshake`의 의미 변경.** §2.2. 순수 코어의 동작을 바꾸는 변경이라 리뷰에서 반드시 봐야 한다. 근거는 "릴레이 핸드셰이크는 직접 경로의 증거가 아니다"이고, 그 근거가 틀렸다면 §6.2의 5번에서 드러난다.
+- **리뷰에서 나온 세 결함을 같은 브랜치에서 고쳤다.** (1) `Effect::SetPeerEndpoint`가 AllowedIPs를 빈 목록으로 덮어쓰던 것 — §2.4. (2) Degraded 임계값이 `RekeyAfterTime`보다 짧아 살아 있는 직접 경로를 죽었다고 볼 수 있던 것 — §3. (3) 후보 등급이 선택 단계에 도달하지 못하던 것 — §2.3. 셋 다 실기에서 드러났을 문제이고, 통합 테스트로 되돌림을 막았다.
 - **`upnp = true`일 때 게이트웨이 실패는 라운드 실패다.** 지금은 조용히 넘어가지 않고 에러로 올린다. 실기에서 "UPnP가 없는 네트워크에서 켜 두면 어떻게 되어야 하는가"를 정해야 한다(현재 기본값이 `false`인 이유이기도 하다).
+
+## 9. 독립 리뷰가 남긴 것
+
+이 브랜치는 머지 전에 독립 리뷰를 한 번 받았다(다른 에이전트, 같은 커밋 `ccc0468` + 수정 커밋). 리뷰는 mutation 테스트를 네 번 돌려 어떤 테스트가 비어 있는지 확인했고, 그중 두 개가 헛돌고 있었다:
+
+- `both_local_classes_off_leaves_the_relay_as_the_best_candidate`는 빈 fixture를 써서 정책 게이팅을 통째로 지워도 통과했다 → 비어 있지 않은 fixture로 고쳤다.
+- `no_mapping_source_produces_no_mapping_candidate`는 정의상 참이었다 → 지웠다.
+
+그리고 리뷰가 지적한 **하네스의 한계**는 정직하게 남겨 둔다. 통합 테스트의 `FakeWireGuard`는 keepalive가 핸드셰이크를 만든다고 모델한다. 실제 WireGuard의 핸드셰이크 시각은 재키(약 2분)에 움직이고 keepalive(25초)에는 움직이지 않는다. 그래서 §3의 임계값을 이 하네스로는 검증할 수 없다 — §6.2의 6번이 그 자리를 메운다. 같은 이유로 "1왕복 자가치유"는 릴레이가 `sync_interval_secs` 주기로만 관측한다는 모델 위에서만 참이다(하네스가 매 틱마다 관측을 넣으면 그 주장은 하네스의 성질이 된다 — 그래서 주기를 실제와 맞춰 두었다).

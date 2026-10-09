@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use wgmesh_core::{DiscoveryPolicy, DiscoverySources, Endpoint, Millis};
+use wgmesh_core::{DiscoverySources, Endpoint, Millis};
 use wgmesh_ports::{AddressScope, DiscoveryError, InterfaceInventory, PortMapper};
 
 /// Gathers the raw material for candidate ranking.
@@ -33,9 +33,10 @@ where
         self.mapping_lifetime
     }
 
+    /// Gather raw sources. Policy is applied later, by `core::discover`; this
+    /// use case only decides whether the router is spoken to.
     pub async fn collect(
         &self,
-        policy: DiscoveryPolicy,
         upnp: bool,
         now: Millis,
     ) -> Result<DiscoverySources, DiscoveryError> {
@@ -55,7 +56,6 @@ where
             sources.mapping = Some((mapped.endpoint, now));
         }
 
-        let _ = policy;
         Ok(sources)
     }
 }
@@ -96,7 +96,7 @@ mod tests {
         let mapper = RecordingPortMapper::new(Some(ep(40000)));
         let discovery = discovery(mapper.clone());
 
-        let sources = block_on(discovery.collect(DiscoveryPolicy::default(), false, Millis::ZERO))
+        let sources = block_on(discovery.collect(false, Millis::ZERO))
             .expect("discovery without a port mapper must succeed");
 
         assert_eq!(
@@ -114,8 +114,8 @@ mod tests {
         let mapper = RecordingPortMapper::new(Some(ep(40000)));
         let discovery = discovery(mapper.clone());
 
-        let sources = block_on(discovery.collect(DiscoveryPolicy::default(), true, Millis::ZERO))
-            .expect("the fake gateway answers");
+        let sources =
+            block_on(discovery.collect(true, Millis::ZERO)).expect("the fake gateway answers");
 
         assert_eq!(mapper.calls(), 1);
         assert_eq!(mapper.call_log(), vec![(51820, Duration::from_secs(3600))]);
@@ -137,9 +137,7 @@ mod tests {
     fn a_failing_gateway_fails_the_round_rather_than_silently_dropping_the_class() {
         let mapper = RecordingPortMapper::new(None);
         let discovery = discovery(mapper.clone());
-        assert!(
-            block_on(discovery.collect(DiscoveryPolicy::default(), true, Millis::ZERO)).is_err()
-        );
+        assert!(block_on(discovery.collect(true, Millis::ZERO)).is_err());
         assert_eq!(mapper.calls(), 1);
     }
 
@@ -151,7 +149,7 @@ mod tests {
             lan_candidates: false,
             ipv6: true,
         };
-        let sources = block_on(discovery.collect(policy, false, Millis::ZERO)).expect("addresses");
+        let sources = block_on(discovery.collect(false, Millis::ZERO)).expect("addresses");
         let kinds: Vec<wgmesh_core::CandidateKind> = rank(&discover(&sources, policy))
             .into_iter()
             .map(|candidate| candidate.kind)

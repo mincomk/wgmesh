@@ -2,8 +2,8 @@ use std::fmt;
 use std::time::Duration;
 
 use wgmesh_core::{
-    CandidateKind, Change, DeviceId, Effect, Event, Millis, Path, PeerSpec, PublicKey, Traversal,
-    TraversalConfig, step,
+    Allowed, CandidateKind, Change, DeviceId, DiscoveryPolicy, DiscoverySources, Effect, Event,
+    Millis, Path, PeerSpec, PublicKey, Traversal, TraversalConfig, discover, step,
 };
 use wgmesh_ports::{ApiError, Clock, CoordinatorApi, Observation, WireGuard, WireGuardError};
 
@@ -14,22 +14,19 @@ use wgmesh_ports::{ApiError, Clock, CoordinatorApi, Observation, WireGuard, Wire
 pub struct PeerTraversal {
     pub peer: DeviceId,
     pub key: PublicKey,
+    pub allowed: Vec<Allowed>,
     pub state: Traversal,
     pub last_handshake: Option<Millis>,
     pub last_observation: Option<Millis>,
 }
 
 impl PeerTraversal {
-    pub fn new(peer: DeviceId, key: PublicKey, config: &TraversalConfig) -> Self {
-        let mut state = Traversal::new();
-        state.phase = wgmesh_core::Phase::Idle {
-            next_attempt: Millis::ZERO,
-        };
-        let _ = config;
+    pub fn new(peer: DeviceId, key: PublicKey, allowed: Vec<Allowed>) -> Self {
         Self {
             peer,
             key,
-            state,
+            allowed,
+            state: Traversal::new(),
             last_handshake: None,
             last_observation: None,
         }
@@ -43,6 +40,17 @@ impl PeerTraversal {
 /// several keepalive periods is the only signal there is, and it is the agent's
 /// job to turn it into `Event::Degraded` — the core deliberately does not
 /// second-guess a path that is still working.
+/// How long a direct path may go without a handshake before it is called dead.
+///
+/// A live but idle direct path only rekeys every `RekeyAfterTime` (120s in
+/// wireguard-go), and `persistent-keepalive` sends an authenticated empty data
+/// packet, which does not advance the handshake timestamp. WireGuard tears the
+/// session down at `RejectAfterTime` (180s). The deadline is therefore scaled
+/// with the keepalive interval but never falls below that teardown window —
+/// under it a perfectly healthy path would look dead and the agent would bounce
+/// it onto the relay.
+pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(180);
+
 pub fn degraded(
     path: Path,
     last_handshake: Option<Millis>,
@@ -52,7 +60,7 @@ pub fn degraded(
     if path != Path::Direct {
         return false;
     }
-    let deadline = keepalive.saturating_mul(3);
+    let deadline = keepalive.saturating_mul(3).max(HANDSHAKE_DEADLINE);
     match last_handshake {
         Some(at) => now.elapsed_since(at) > deadline,
         None => true,
@@ -95,6 +103,35 @@ where
 
     pub fn keepalive(&self) -> Duration {
         self.keepalive
+    }
+
+    /// Feed the locally derived candidates into one peer's traversal.
+    ///
+    /// A relay observation is only one of the five classes. A same-LAN address,
+    /// a global IPv6 address and a NAT-PMP/UPnP mapping are produced on this
+    /// node, and `Event::Observed` is the only door into the candidate list, so
+    /// without this the ranking that orders them would be a pure function nobody
+    /// calls and a `Lan` or `Ipv6` candidate could never reach the code that
+    /// picks an endpoint.
+    pub fn offer_candidates(
+        &self,
+        peer: &mut PeerTraversal,
+        sources: &DiscoverySources,
+        policy: DiscoveryPolicy,
+    ) -> usize {
+        let candidates = discover(sources, policy);
+        for candidate in &candidates {
+            step(
+                &mut peer.state,
+                Event::Observed {
+                    endpoint: candidate.endpoint,
+                    kind: candidate.kind,
+                    at: candidate.observed_at,
+                },
+                &self.config,
+            );
+        }
+        candidates.len()
     }
 
     /// One round of the agent loop for one peer.
@@ -155,10 +192,15 @@ where
         for effect in &effects {
             match effect {
                 Effect::SetPeerEndpoint(endpoint) => {
+                    // The traversal moves the endpoint and nothing else. The
+                    // key, the AllowedIPs that `program_allowed_ips` assigned
+                    // and the keepalive travel through unchanged, because a
+                    // `Change::Update` is a whole peer: an empty AllowedIPs
+                    // list would wipe the cryptokey routing.
                     let spec = PeerSpec {
                         id: peer.peer,
                         key: peer.key,
-                        allowed: Vec::new(),
+                        allowed: peer.allowed.clone(),
                         endpoint: Some(*endpoint),
                         keepalive: Some(self.keepalive),
                     };
@@ -226,17 +268,31 @@ mod tests {
     }
 
     #[test]
-    fn a_direct_path_without_handshakes_for_three_keepalives_is_degraded() {
+    fn a_direct_path_without_handshakes_past_the_teardown_window_is_degraded() {
         assert!(degraded(
             Path::Direct,
             Some(Millis::from_secs(100)),
-            Millis::from_secs(176),
+            Millis::from_secs(281),
             Duration::from_secs(25)
         ));
         assert!(degraded(
             Path::Direct,
             None,
             Millis::from_secs(1),
+            Duration::from_secs(25)
+        ));
+    }
+
+    #[test]
+    fn an_idle_direct_path_inside_the_rekey_window_is_not_degraded() {
+        // 150 seconds without a handshake is longer than three keepalives but
+        // shorter than RejectAfterTime: an idle-but-alive path looks exactly
+        // like this, so calling it dead would bounce a working path onto the
+        // relay every few minutes.
+        assert!(!degraded(
+            Path::Direct,
+            Some(Millis::from_secs(100)),
+            Millis::from_secs(250),
             Duration::from_secs(25)
         ));
     }

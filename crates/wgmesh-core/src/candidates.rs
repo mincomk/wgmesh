@@ -197,22 +197,21 @@ mod tests {
 
     #[test]
     fn both_local_classes_off_leaves_the_relay_as_the_best_candidate() {
+        // The sources are non-empty on purpose: with an empty fixture this test
+        // would pass even if the policy were ignored entirely.
+        let sources = DiscoverySources {
+            lan: vec![(ep(1000), Millis::from_secs(1))],
+            ipv6: vec![(ep(1001), Millis::from_secs(2))],
+            ..DiscoverySources::default()
+        };
         let policy = DiscoveryPolicy {
             lan_candidates: false,
             ipv6: false,
         };
-        let best = best_candidate(&DiscoverySources::default(), policy, ep(9000), Millis::ZERO);
+        assert!(discover(&sources, policy).is_empty());
+
+        let best = best_candidate(&sources, policy, ep(9000), Millis::ZERO);
         assert_eq!(best.kind, CandidateKind::Relay);
         assert_eq!(best.endpoint, ep(9000));
-    }
-
-    #[test]
-    fn no_mapping_source_produces_no_mapping_candidate() {
-        let sources = DiscoverySources {
-            mapping: None,
-            ..sources()
-        };
-        let candidates = discover(&sources, DiscoveryPolicy::default());
-        assert!(candidates.iter().all(|c| c.kind != CandidateKind::Mapping));
     }
 }

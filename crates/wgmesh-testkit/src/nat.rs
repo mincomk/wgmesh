@@ -19,6 +19,7 @@ struct NatState {
     relay_endpoint: Endpoint,
     peer_observed: Endpoint,
     direct_broken: bool,
+    always_reachable: Vec<Endpoint>,
 }
 
 /// A NAT simulator reduced to the one question the traversal asks it: "if the
@@ -36,13 +37,25 @@ impl NatSim {
                 relay_endpoint,
                 peer_observed,
                 direct_broken: false,
+                always_reachable: Vec::new(),
             })),
         }
     }
 
+    /// An address that reaches the peer without a NAT traversal at all: a
+    /// same-LAN address, or a global IPv6 address. That is what makes the `Lan`
+    /// and `Ipv6` classes worth ranking above the relay-observed one.
+    pub fn allow_through(&self, endpoint: Endpoint) {
+        self.state
+            .lock()
+            .expect("nat mutex")
+            .always_reachable
+            .push(endpoint);
+    }
+
     pub fn reachable(&self, endpoint: Endpoint) -> bool {
         let state = self.state.lock().expect("nat mutex");
-        if endpoint == state.relay_endpoint {
+        if endpoint == state.relay_endpoint || state.always_reachable.contains(&endpoint) {
             return true;
         }
         if endpoint == state.peer_observed {
@@ -55,10 +68,6 @@ impl NatSim {
     /// unaffected: that asymmetry is the whole reason the fallback exists.
     pub fn break_direct(&self) {
         self.state.lock().expect("nat mutex").direct_broken = true;
-    }
-
-    pub fn heal_direct(&self) {
-        self.state.lock().expect("nat mutex").direct_broken = false;
     }
 
     pub fn profile(&self) -> NatProfile {
