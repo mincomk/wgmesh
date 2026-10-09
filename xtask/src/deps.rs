@@ -55,7 +55,7 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
     (
         "wgmesh-proto",
         &["wgmesh-core"],
-        &["serde", "base64ct", "hex"],
+        &["serde", "base64ct", "hex", "serde_json", "sha2"],
     ),
     (
         "wgmesh-wireguard",
@@ -77,7 +77,7 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-state",
             "wgmesh-secrets",
         ],
-        &["axum", "sqlx", "tokio", "tower-http"],
+        &["axum", "sqlx", "tokio", "tower-http", "async-trait", "clap"],
     ),
     (
         "wgmesh-relay",

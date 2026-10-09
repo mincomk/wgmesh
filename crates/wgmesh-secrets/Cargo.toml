@@ -11,3 +11,4 @@ workspace = true
 
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
+ed25519-dalek = "2"
