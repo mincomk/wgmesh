@@ -900,3 +900,86 @@ fn doctor_catches_prefixes_outside_the_coordinators_bands() {
         "a prefix outside the coordinator's bands was not reported: {names:?}"
     );
 }
+
+/// A prober that can only answer from one address: it reports what it saw for
+/// `WGMP1 M`, and for `WGMP1 F` sends the one datagram it honestly can — the
+/// one from the endpoint we already contacted.
+///
+/// It is deliberately not a *good* prober. Half the point of the classifier is
+/// that it refuses to claim more than the evidence supports, and a prober with
+/// one socket can never show endpoint-independent filtering.
+fn spawn_prober() -> std::net::SocketAddr {
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("the prober binds");
+    let address = socket.local_addr().expect("its address");
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 256];
+        while let Ok((len, from)) = socket.recv_from(&mut buffer) {
+            match String::from_utf8_lossy(&buffer[..len]).trim() {
+                "WGMP1 M" => {
+                    let _ = socket.send_to(format!("WGMP1 {from}").as_bytes(), from);
+                }
+                "WGMP1 F" => {
+                    let _ = socket.send_to(b"WGMP1 SAME", from);
+                }
+                _ => {}
+            }
+        }
+    });
+    address
+}
+
+#[test]
+fn doctor_probes_the_nat_and_says_only_what_the_probe_showed() {
+    let first = spawn_prober();
+    let second = spawn_prober();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = minimal_config(dir.path());
+
+    let out = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "doctor", "--json"])
+        .arg("--nat-probe")
+        .arg(first.to_string())
+        .arg("--nat-probe")
+        .arg(second.to_string())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("valid json on stdout");
+
+    // One local socket talking to two probers is seen from the same port by
+    // both, which is what endpoint-independent mapping means.
+    let mapping = value["nat"]["mapping"].as_str().unwrap_or_default();
+    assert!(mapping.contains("endpoint-independent"), "{mapping}");
+
+    // The prober sends only from the endpoint we contacted, and the classifier
+    // must not claim more than that.
+    let filtering = value["nat"]["filtering"].as_str().unwrap_or_default();
+    assert!(
+        filtering.contains("address-and-port-dependent"),
+        "{filtering}"
+    );
+    assert_eq!(
+        value["nat"]["observations"].as_array().map(Vec::len),
+        Some(2)
+    );
+}
+
+#[test]
+fn a_nat_probe_that_gets_no_answer_says_so_rather_than_guessing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = minimal_config(dir.path());
+    let assertion = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "doctor"])
+        // Nothing listens on the discard port.
+        .args(["--nat-probe", "127.0.0.1:9"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).into_owned();
+    assert!(stderr.contains("NAT probe could not complete"), "{stderr}");
+}
