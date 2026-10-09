@@ -321,6 +321,9 @@ pub struct Relay {
     pub operator: Option<String>,
     pub last_heartbeat_at: Option<Millis>,
     pub agent_version: Option<String>,
+    /// Whether the relay says it is draining: it takes no new pairs and its pairs are
+    /// being handed over to another relay.
+    pub draining: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -396,6 +399,9 @@ pub trait Directory: Send + Sync {
     async fn relays_of(&self, network_id: u32) -> Result<Vec<Relay>, PortError>;
     async fn link_relay_network(&self, relay: RelayId, network_id: u32) -> Result<(), PortError>;
     async fn set_relay_state(&self, id: RelayId, state: RelayState) -> Result<(), PortError>;
+    /// Record what a relay said about draining. It arrives on the heartbeat, and it is
+    /// what stops a pair being placed on a relay that is on its way out.
+    async fn set_relay_draining(&self, id: RelayId, draining: bool) -> Result<(), PortError>;
     async fn record_heartbeat(
         &self,
         id: RelayId,
