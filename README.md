@@ -70,6 +70,7 @@ under `crates/` and `xtask/`, comments included. Source comments are English.
 | `crates/wgmesh-coordinator` | Coordinator application and the `wgmeshd` binary. |
 | `crates/wgmesh-relay` | Relay forwarding engine, UDP driver and the `wgmesh-relayd` binary. |
 | `crates/wgmesh-cli` | The `wgmesh` binary: the composition root that wires adapters to use cases. |
+| `crates/wgmesh-conformance` | The M0 conformance lab: the relay-to-direct promotion sequence over real loopback UDP, with relay failover and a structural check that the coordinator holds no data-path socket. It ships its own `lab-coordinator` and `lab-relayd` processes until the real ones land; see `wgmesh-M0-report.md`. |
 | `xtask` | The repository checks above, as a crate. |
 | `docs` | The design documents. |
 

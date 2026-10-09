@@ -2130,6 +2130,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wgmesh-conformance"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "serde",
+ "serde_json",
+ "wgmesh-core",
+]
+
+[[package]]
 name = "wgmesh-coordinator"
 version = "0.1.0"
 dependencies = [

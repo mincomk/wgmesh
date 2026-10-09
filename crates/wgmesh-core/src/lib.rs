@@ -309,13 +309,33 @@ pub fn step(state: &mut Traversal, event: Event, cfg: &TraversalConfig) -> Vec<E
             vec![]
         }
         Event::Handshake { via, at } => {
-            state.path = match state.relay {
-                Some(relay) if via == relay => Path::Relayed,
-                _ => Path::Direct,
+            // A handshake that arrives over the relay is evidence that the relay
+            // path works; it is *not* evidence that the direct path does. Only a
+            // direct handshake may clear the attempt counter and pull the next
+            // probe forward -- otherwise relayed traffic would reset the backoff
+            // as fast as it is armed, and a pair that cannot be punched would
+            // re-punch every `punch_window` forever instead of backing off.
+            let direct = match state.relay {
+                Some(relay) => via != relay,
+                None => true,
             };
-            state.attempts = 0;
             state.active = Some(via);
-            state.phase = Phase::Idle { next_attempt: at };
+            if direct {
+                state.path = Path::Direct;
+                state.attempts = 0;
+                state.phase = Phase::Idle { next_attempt: at };
+            } else {
+                state.path = Path::Relayed;
+                if matches!(state.phase, Phase::Probing { .. }) {
+                    // The punch did not take: the peer is still only reachable
+                    // through the relay, so this counts as a failed attempt.
+                    state.attempts = state.attempts.saturating_add(1);
+                    let next_attempt = at.plus(state.backoff_for(cfg));
+                    state.phase = Phase::Idle { next_attempt };
+                }
+                // Otherwise the pending schedule stands: neither punch_delay nor
+                // an armed backoff is moved by relayed traffic.
+            }
             vec![]
         }
         Event::Degraded { at } => {
@@ -995,6 +1015,127 @@ mod tests {
                 Millis::from_secs(2)
             ),
             Route::Drop(DropReason::Malformed)
+        );
+    }
+
+    #[test]
+    fn a_relayed_handshake_does_not_pull_the_punch_forward() {
+        let (mut state, cfg, relay, _peer) = assigned(Millis::ZERO);
+        step(
+            &mut state,
+            Event::Handshake {
+                via: relay,
+                at: Millis::from_millis(300),
+            },
+            &cfg,
+        );
+        assert_eq!(state.path, Path::Relayed);
+        assert_eq!(
+            state.phase,
+            Phase::Idle {
+                next_attempt: Millis::from_secs(2)
+            },
+            "the relayed session coming up must not skip the punch delay"
+        );
+    }
+
+    #[test]
+    fn a_relayed_handshake_does_not_reset_an_armed_backoff() {
+        let (mut state, cfg, relay, peer) = assigned(Millis::ZERO);
+        observe(&mut state, &cfg, peer, Millis::from_secs(1));
+        step(
+            &mut state,
+            Event::Tick {
+                at: Millis::from_secs(2),
+            },
+            &cfg,
+        );
+        let fallback = step(
+            &mut state,
+            Event::Tick {
+                at: Millis::from_secs(8),
+            },
+            &cfg,
+        );
+        assert_eq!(
+            fallback,
+            vec![Effect::SetPeerEndpoint(relay), Effect::SendHandshake]
+        );
+        assert_eq!(state.attempts, 1);
+        assert_eq!(
+            state.phase,
+            Phase::Idle {
+                next_attempt: Millis::from_secs(38)
+            }
+        );
+
+        // The relayed session comes back 200ms later. That is not a direct path.
+        step(
+            &mut state,
+            Event::Handshake {
+                via: relay,
+                at: Millis::from_millis(8_200),
+            },
+            &cfg,
+        );
+        assert_eq!(state.path, Path::Relayed);
+        assert_eq!(
+            state.attempts, 1,
+            "a relayed handshake is not a direct path"
+        );
+        assert_eq!(
+            state.phase,
+            Phase::Idle {
+                next_attempt: Millis::from_secs(38)
+            },
+            "the backoff stays armed"
+        );
+        assert!(
+            step(
+                &mut state,
+                Event::Tick {
+                    at: Millis::from_secs(9)
+                },
+                &cfg
+            )
+            .is_empty(),
+            "so no probe starts while the backoff runs"
+        );
+    }
+
+    #[test]
+    fn a_relayed_handshake_during_a_probe_counts_as_a_failed_attempt() {
+        let (mut state, cfg, relay, peer) = assigned(Millis::ZERO);
+        observe(&mut state, &cfg, peer, Millis::from_secs(1));
+        step(
+            &mut state,
+            Event::Tick {
+                at: Millis::from_secs(2),
+            },
+            &cfg,
+        );
+        assert_eq!(
+            state.phase,
+            Phase::Probing {
+                since: Millis::from_secs(2)
+            }
+        );
+
+        step(
+            &mut state,
+            Event::Handshake {
+                via: relay,
+                at: Millis::from_secs(3),
+            },
+            &cfg,
+        );
+        assert_eq!(state.path, Path::Relayed);
+        assert_eq!(state.attempts, 1);
+        assert_eq!(
+            state.phase,
+            Phase::Idle {
+                next_attempt: Millis::from_secs(33)
+            }
         );
     }
 }

@@ -5,6 +5,7 @@ members = [
     "crates/wgmesh-cli",
     "crates/wgmesh-client",
     "crates/wgmesh-config",
+    "crates/wgmesh-conformance",
     "crates/wgmesh-coordinator",
     "crates/wgmesh-core",
     "crates/wgmesh-ports",
