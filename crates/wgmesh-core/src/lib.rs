@@ -9,7 +9,9 @@ use blake2::digest::consts::U16;
 use blake2::digest::{Digest, KeyInit, Mac, Update};
 use blake2::{Blake2s256, Blake2sMac};
 
+pub mod candidates;
 pub mod route;
+pub use candidates::*;
 pub use route::*;
 
 const LABEL_MAC1: &[u8] = b"mac1----";
@@ -187,10 +189,22 @@ pub enum Phase {
     Probing { since: Millis },
 }
 
+/// Something the traversal wants done, in the vocabulary of a WireGuard peer.
+///
+/// `SetPeerEndpoint` is a *switch*, not an addition. A WireGuard peer has
+/// exactly one endpoint, so there is no state in which traffic keeps flowing to
+/// the relay while a direct path is being verified, and there can be no
+/// "verify, then switch": the moment an endpoint is written the relay path is
+/// gone, and it has to be written back if the direct attempt fails. That is why
+/// the direct attempt runs inside a bounded `punch_window` and why the fallback
+/// is a return to the relay slot rather than a second endpoint.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Effect {
+    /// Point the peer at one endpoint, replacing whatever it was.
     SetPeerEndpoint(Endpoint),
+    /// Make the kernel initiate a handshake with the peer now.
     SendHandshake,
+    /// Tell the coordinator where this node was observed from.
     ReportObservation(Endpoint),
 }
 
@@ -217,7 +231,7 @@ pub enum Event {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraversalConfig {
     pub punch_delay: Duration,
     pub punch_window: Duration,
@@ -309,13 +323,34 @@ pub fn step(state: &mut Traversal, event: Event, cfg: &TraversalConfig) -> Vec<E
             vec![]
         }
         Event::Handshake { via, at } => {
-            state.path = match state.relay {
-                Some(relay) if via == relay => Path::Relayed,
-                _ => Path::Direct,
+            // A handshake that arrives over the relay is evidence that the relay
+            // path works; it is not evidence that the direct path does. Only a
+            // direct handshake may clear the attempt counter and pull the next
+            // probe forward. Otherwise the persistent keepalive's relayed
+            // handshakes would rearm the retreat as fast as it is armed, and a
+            // pair that cannot be punched would re-punch every `punch_window`
+            // forever instead of retreating 30s, then 2m, then 10m.
+            let direct = match state.relay {
+                Some(relay) => via != relay,
+                None => true,
             };
-            state.attempts = 0;
             state.active = Some(via);
-            state.phase = Phase::Idle { next_attempt: at };
+            if direct {
+                state.path = Path::Direct;
+                state.attempts = 0;
+                state.phase = Phase::Idle { next_attempt: at };
+            } else {
+                state.path = Path::Relayed;
+                if matches!(state.phase, Phase::Probing { .. }) {
+                    // The punch did not take: the peer is still only reachable
+                    // through the relay, so this counts as a failed attempt.
+                    state.attempts = state.attempts.saturating_add(1);
+                    let next_attempt = at.plus(state.backoff_for(cfg));
+                    state.phase = Phase::Idle { next_attempt };
+                }
+                // Otherwise the pending schedule stands: neither the punch delay
+                // nor an armed retreat is moved by relayed traffic.
+            }
             vec![]
         }
         Event::Degraded { at } => {
@@ -996,5 +1031,149 @@ mod tests {
             ),
             Route::Drop(DropReason::Malformed)
         );
+    }
+
+    #[test]
+    fn a_relayed_handshake_does_not_pull_the_punch_forward() {
+        let (mut state, cfg, relay, _peer) = assigned(Millis::ZERO);
+        step(
+            &mut state,
+            Event::Handshake {
+                via: relay,
+                at: Millis::from_millis(300),
+            },
+            &cfg,
+        );
+        assert_eq!(state.path, Path::Relayed);
+        assert_eq!(
+            state.phase,
+            Phase::Idle {
+                next_attempt: Millis::from_secs(2)
+            },
+            "the relayed session coming up must not skip the punch delay"
+        );
+    }
+
+    #[test]
+    fn a_relayed_handshake_does_not_reset_an_armed_retreat() {
+        let (mut state, cfg, relay, peer) = assigned(Millis::ZERO);
+        observe(&mut state, &cfg, peer, Millis::from_secs(1));
+        step(
+            &mut state,
+            Event::Tick {
+                at: Millis::from_secs(2),
+            },
+            &cfg,
+        );
+        let fallback = step(
+            &mut state,
+            Event::Tick {
+                at: Millis::from_secs(8),
+            },
+            &cfg,
+        );
+        assert_eq!(
+            fallback,
+            vec![Effect::SetPeerEndpoint(relay), Effect::SendHandshake]
+        );
+        assert_eq!(state.attempts, 1);
+        assert_eq!(
+            state.phase,
+            Phase::Idle {
+                next_attempt: Millis::from_secs(38)
+            }
+        );
+
+        // The relayed session comes back 200ms later. That is not a direct path.
+        step(
+            &mut state,
+            Event::Handshake {
+                via: relay,
+                at: Millis::from_millis(8_200),
+            },
+            &cfg,
+        );
+        assert_eq!(state.path, Path::Relayed);
+        assert_eq!(
+            state.attempts, 1,
+            "a relayed handshake is not a direct path"
+        );
+        assert_eq!(
+            state.phase,
+            Phase::Idle {
+                next_attempt: Millis::from_secs(38)
+            },
+            "the retreat stays armed"
+        );
+        assert!(
+            step(
+                &mut state,
+                Event::Tick {
+                    at: Millis::from_secs(9)
+                },
+                &cfg
+            )
+            .is_empty(),
+            "so no probe starts while the retreat runs"
+        );
+    }
+
+    #[test]
+    fn a_relayed_handshake_during_a_probe_counts_as_a_failed_attempt() {
+        let (mut state, cfg, relay, peer) = assigned(Millis::ZERO);
+        observe(&mut state, &cfg, peer, Millis::from_secs(1));
+        step(
+            &mut state,
+            Event::Tick {
+                at: Millis::from_secs(2),
+            },
+            &cfg,
+        );
+        assert_eq!(
+            state.phase,
+            Phase::Probing {
+                since: Millis::from_secs(2)
+            }
+        );
+
+        step(
+            &mut state,
+            Event::Handshake {
+                via: relay,
+                at: Millis::from_secs(3),
+            },
+            &cfg,
+        );
+        assert_eq!(state.path, Path::Relayed);
+        assert_eq!(state.attempts, 1);
+        assert_eq!(
+            state.phase,
+            Phase::Idle {
+                next_attempt: Millis::from_secs(33)
+            }
+        );
+    }
+
+    #[test]
+    fn the_retreat_grows_thirty_seconds_two_minutes_ten_minutes() {
+        // The acceptance criterion, as arithmetic: each failure arms the next
+        // attempt out of `TraversalConfig::default().backoff`, and the last step
+        // holds rather than growing without bound.
+        let (mut state, cfg, _relay, peer) = assigned(Millis::ZERO);
+        observe(&mut state, &cfg, peer, Millis::from_secs(1));
+        let mut waits = Vec::new();
+        let mut at = Millis::from_secs(2);
+        for _ in 0..4 {
+            step(&mut state, Event::Tick { at }, &cfg);
+            at = at.plus(cfg.punch_window);
+            step(&mut state, Event::Tick { at }, &cfg);
+            let next = match state.phase {
+                Phase::Idle { next_attempt } => next_attempt,
+                Phase::Probing { .. } => panic!("the punch window should have closed"),
+            };
+            waits.push(next.elapsed_since(at).as_secs());
+            at = next;
+        }
+        assert_eq!(waits, vec![30, 120, 600, 600]);
     }
 }

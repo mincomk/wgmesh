@@ -28,6 +28,7 @@
 // re-enroll and refuse-to-continue decisions are all made from that class.
 
 pub mod coordinator;
+pub mod discovery;
 pub mod fake;
 pub mod prefix;
 pub mod routes;
@@ -40,6 +41,9 @@ use std::fmt;
 pub use coordinator::{
     ConfigSnapshot, CoordinatorApi, EnrollRequest, Enrollment, JoinToken, Observation,
     PunchOutcome, PunchReport, RelayAssignment,
+};
+pub use discovery::{
+    AddressScope, DiscoveryError, InterfaceInventory, LocalAddress, MappedPort, PortMapper,
 };
 pub use prefix::{MARKER_PROTO, family_flag, format_prefix, is_catch_all, parse_prefix};
 pub use routes::Routes;

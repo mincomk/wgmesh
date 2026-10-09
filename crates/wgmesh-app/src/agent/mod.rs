@@ -17,19 +17,22 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use traversal::{DEFAULT_KEEPALIVE, TraversalRunner};
 use wgmesh_core::Effect as TraversalEffect;
 use wgmesh_core::{
-    Allowed, AllowedIpsPolicy, CandidateKind, Change, DeviceId, Event, Millis, Path, PeerSpec,
-    RouteChange, RoutePrefixes, RouteSpec, RouteTable, RoutingError, Traversal, TraversalConfig,
-    desired_routes, diff, plan_routes, program_allowed_ips, step,
+    Allowed, AllowedIpsPolicy, CandidateKind, Change, DeviceId, DiscoveryPolicy, Event, Millis,
+    Path, PeerSpec, RouteChange, RoutePrefixes, RouteSpec, RouteTable, RoutingError, Traversal,
+    TraversalConfig, desired_routes, diff, plan_routes, program_allowed_ips, step,
 };
 use wgmesh_ports::{
     Clock, ConfigSnapshot, CoordinatorApi, EnrollRequest, InterfaceSpec, JoinToken, Observation,
     PeerRecord, PeerStatus, PersistedState, Routes, SecretStore, Spki, StateStore, WireGuard,
 };
 
+pub mod discovery;
 pub mod effect;
 pub mod error;
+pub mod traversal;
 
 pub use effect::{Effect, dispatch, dispatch_all};
 pub use error::AppError;
@@ -61,6 +64,16 @@ pub struct AgentSettings {
     pub route_metric: Option<u32>,
     /// The keepalive to ask peers for.
     pub peer_keepalive: Option<Duration>,
+    /// Which candidate classes this node derives for itself.
+    pub discovery: DiscoveryPolicy,
+    /// Whether NAT-PMP and UPnP-IGD may be spoken to at all.
+    ///
+    /// Off by default, and off means off: `CandidateDiscovery` does not call the
+    /// port mapper, so no request leaves the node. A mapping is an opportunistic
+    /// extra candidate rather than a prerequisite for anything.
+    pub upnp: bool,
+    /// How long a port mapping is asked to live.
+    pub mapping_lifetime: Duration,
 }
 
 impl AgentSettings {
@@ -80,6 +93,9 @@ impl AgentSettings {
             route_table: RouteTable::Main,
             route_metric: None,
             peer_keepalive: None,
+            discovery: DiscoveryPolicy::default(),
+            upnp: false,
+            mapping_lifetime: Duration::from_secs(1800),
         }
     }
 
@@ -128,6 +144,24 @@ impl AgentSettings {
     /// Set the keepalive asked of peers.
     pub fn with_peer_keepalive(mut self, keepalive: Duration) -> Self {
         self.peer_keepalive = Some(keepalive);
+        self
+    }
+
+    /// Set which candidate classes this node derives for itself.
+    pub fn with_discovery(mut self, discovery: DiscoveryPolicy) -> Self {
+        self.discovery = discovery;
+        self
+    }
+
+    /// Allow or forbid NAT-PMP and UPnP-IGD.
+    pub fn with_upnp(mut self, upnp: bool) -> Self {
+        self.upnp = upnp;
+        self
+    }
+
+    /// Set how long a port mapping is asked to live.
+    pub fn with_mapping_lifetime(mut self, mapping_lifetime: Duration) -> Self {
+        self.mapping_lifetime = mapping_lifetime;
         self
     }
 }
@@ -293,6 +327,21 @@ where
             device,
             peer,
             self.settings.traversal.clone(),
+        )
+    }
+
+    /// A runner: the round-by-round loop over what `traverse` steps through.
+    ///
+    /// The keepalive is the configured one, or [`DEFAULT_KEEPALIVE`] when the
+    /// settings name none — a traversal without a keepalive has nothing to make
+    /// both sides send at once, and nothing to keep a NAT mapping alive.
+    pub fn traversal_runner(&self) -> TraversalRunner<'a, W, C, K> {
+        TraversalRunner::new(
+            self.ports.wireguard,
+            self.ports.coordinator,
+            self.ports.clock,
+            self.settings.traversal.clone(),
+            self.settings.peer_keepalive.unwrap_or(DEFAULT_KEEPALIVE),
         )
     }
 
