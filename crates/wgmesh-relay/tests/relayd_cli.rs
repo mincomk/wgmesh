@@ -210,6 +210,50 @@ fn run_refuses_an_assignment_file_it_cannot_read_or_parse() {
 }
 
 #[test]
+fn the_config_file_names_the_policy_for_a_broken_control_link() {
+    let state = scratch("config");
+    let config = state.join("relay.toml");
+
+    // The availability-first policy is a config decision, not a code path: an operator
+    // who would rather keep a live session through a control-plane outage writes `serve`.
+    fs::write(
+        &config,
+        "relay_id = \"relay_9f2c\"\nkeyset_ttl_secs = 300\nestablished_sessions = \"serve\"\n",
+    )
+    .unwrap();
+    let served = run(&[
+        "status",
+        "--config",
+        config.to_str().unwrap(),
+        "--state-dir",
+        state.to_str().unwrap(),
+    ]);
+    assert!(
+        served.status.success(),
+        "`established_sessions = \"serve\"` must be accepted: {}",
+        text(&served)
+    );
+
+    // Anything else is refused rather than silently defaulted: the policy is the one
+    // thing standing between a stale keyset and a revoked device.
+    fs::write(&config, "established_sessions = \"maybe\"\n").unwrap();
+    let refused = run(&[
+        "status",
+        "--config",
+        config.to_str().unwrap(),
+        "--state-dir",
+        state.to_str().unwrap(),
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        text(&refused).contains("not `serve` or `refuse`"),
+        "{}",
+        text(&refused)
+    );
+    let _ = fs::remove_dir_all(&state);
+}
+
+#[test]
 fn run_serves_an_assignment_and_stops_on_sigterm() {
     let state = scratch("run-serve");
     let assignment = state.join("assignment");

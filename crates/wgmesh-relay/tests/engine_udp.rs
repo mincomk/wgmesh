@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use wgmesh_relay::wgmesh_core::{DeviceId, Millis};
 use wgmesh_relay::{
-    Assignment, Drop, Keyset, KeysetNetwork, KeysetPeer, Outcome, PairAssignment, RelayConfig,
-    RelayEngine, SlotAssignment, SlotSockets, UdpSlotSockets,
+    Assignment, Drop, EstablishedSessions, Keyset, KeysetNetwork, KeysetPeer, Outcome,
+    PairAssignment, RelayConfig, RelayEngine, SlotAssignment, SlotSockets, UdpSlotSockets,
 };
 
 const LOCAL: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -658,5 +658,78 @@ fn status_names_every_slot_and_pair_the_relay_is_serving() {
         observed,
         vec![2],
         "the relay reports an address only for the slots it has heard from"
+    );
+}
+
+#[test]
+fn an_operator_owned_relay_carries_established_sessions_past_the_ttl() {
+    let at = Millis::from_millis(1_000);
+    let mut engine = engine_with(RelayConfig {
+        keyset_ttl: Duration::from_secs(300),
+        established_sessions: EstablishedSessions::Serve,
+        ..test_config()
+    });
+    engine
+        .on_assignment(assignment(&[1, 2], &[(1, 2)], &[1, 2]), at)
+        .unwrap();
+    let a_port = engine.slot_port(DeviceId(1)).unwrap();
+    let b_port = engine.slot_port(DeviceId(2)).unwrap();
+    let a = Peer::bind();
+    let b = Peer::bind();
+
+    // Establish the session while the keyset is still fresh.
+    b.send(address(b_port), &transport(64));
+    pump_until(&mut engine, at, 1);
+    a.send(address(a_port), &transport(64));
+    pump_until(&mut engine, at, 1);
+    assert!(b.recv_within(LONG).is_some());
+
+    // The coordinator has been gone past the TTL. With `serve` the pair the frozen
+    // keyset names keeps working: a control-plane outage must not cut a live session.
+    let expired = at.plus(Duration::from_secs(301));
+    assert!(engine.keyset_stale(expired));
+    a.send(address(a_port), &transport(64));
+    pump_until(&mut engine, expired, 1);
+    assert_eq!(engine.counters().drops.keyset_stale, 0);
+    assert!(
+        b.recv_within(LONG).is_some(),
+        "`established_sessions = \"serve\"` keeps the frozen keyset's pairs alive"
+    );
+}
+
+#[test]
+fn a_served_relay_still_refuses_a_destination_the_frozen_keyset_never_named() {
+    let at = Millis::from_millis(1_000);
+    let mut engine = engine_with(RelayConfig {
+        keyset_ttl: Duration::from_secs(300),
+        established_sessions: EstablishedSessions::Serve,
+        ..test_config()
+    });
+    // The pair exists and both slots are open, but the keyset names only device 1:
+    // device 2 was dropped from the isolation boundary before the link went down.
+    engine
+        .on_assignment(assignment(&[1, 2], &[(1, 2)], &[1]), at)
+        .unwrap();
+    let a_port = engine.slot_port(DeviceId(1)).unwrap();
+    let b_port = engine.slot_port(DeviceId(2)).unwrap();
+    let a = Peer::bind();
+    let b = Peer::bind();
+
+    b.send(address(b_port), &transport(64));
+    pump_until(&mut engine, at, 1);
+
+    let expired = at.plus(Duration::from_secs(301));
+    a.send(address(a_port), &transport(64));
+    pump_until(&mut engine, expired, 1);
+
+    assert_eq!(engine.counters().drops.keyset_unknown, 1);
+    assert_eq!(
+        engine.counters().drops.keyset_stale,
+        0,
+        "the refusal is the keyset boundary, not the expiry itself"
+    );
+    assert!(
+        b.recv_within(SHORT).is_none(),
+        "a stale keyset never carries a destination it does not name"
     );
 }

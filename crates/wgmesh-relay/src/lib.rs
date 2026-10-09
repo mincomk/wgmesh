@@ -13,7 +13,7 @@ pub use wgmesh_core;
 pub use assignment::{
     Assignment, Keyset, KeysetNetwork, KeysetPeer, PairAssignment, SlotAssignment,
 };
-pub use config::RelayConfig;
+pub use config::{EstablishedSessions, RelayConfig};
 pub use engine::{
     Counters, Drop, DropCounters, Outcome, RelayEngine, Shutdown, ShutdownHandle, UNPAIRED,
     shutdown,

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use wgmesh_core::{DeviceId, DropReason, Endpoint, Millis, RelayTable, Route};
 
 use crate::assignment::{Assignment, Keyset, PairAssignment, SlotAssignment};
-use crate::config::RelayConfig;
+use crate::config::{EstablishedSessions, RelayConfig};
 use crate::error::RelayError;
 use crate::limits::SlotLimit;
 use crate::report::{Heartbeat, Observation, RelayStatus, Report, SlotStatus, TrafficSample};
@@ -444,8 +444,15 @@ impl<S: SlotSockets> RelayEngine<S> {
         if self.draining {
             return self.drop_out(Drop::Draining);
         }
+        // An expired keyset stops new deliveries either way: a destination the frozen
+        // keyset does not name is refused just below, so the isolation boundary holds
+        // whatever this says. `EstablishedSessions` decides only whether the pairs the
+        // frozen keyset already named keep being carried.
         if self.keyset_stale(at) {
-            return self.drop_out(Drop::KeysetStale);
+            match self.config.established_sessions {
+                EstablishedSessions::Refuse => return self.drop_out(Drop::KeysetStale),
+                EstablishedSessions::Serve => {}
+            }
         }
         if !self.keyset_allows(to) {
             return self.drop_out(Drop::KeysetUnknown);
