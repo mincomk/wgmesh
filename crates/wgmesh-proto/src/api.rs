@@ -187,6 +187,9 @@ pub struct HeartbeatBody {
     pub agent_version: Option<String>,
     #[serde(default)]
     pub traffic: Vec<TrafficIn>,
+    /// The relay is draining: it takes no new pairs and its pairs are being handed over.
+    #[serde(default)]
+    pub draining: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]

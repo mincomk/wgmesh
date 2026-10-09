@@ -127,7 +127,7 @@ impl SelectRelay<'_> {
             .await
             .map_err(PlaceError::Store)?
         {
-            if relay.state != RelayState::Active || exclude == Some(relay.id) {
+            if relay.state != RelayState::Active || relay.draining || exclude == Some(relay.id) {
                 continue;
             }
             let pairs = self
