@@ -161,7 +161,12 @@ async fn admin(harness: &Harness, path: &str) -> axum::response::Response {
 // coordinator is right to refuse it, so the helper counts instead.
 async fn config(harness: &Harness, device: &Device) -> axum::response::Response {
     let mut nonce = [0u8; 16];
-    nonce[..8].copy_from_slice(&harness.requests.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+    nonce[..8].copy_from_slice(
+        &harness
+            .requests
+            .fetch_add(1, Ordering::Relaxed)
+            .to_le_bytes(),
+    );
     harness
         .app
         .clone()
@@ -233,20 +238,27 @@ async fn a_request_with_a_wrong_signature_is_refused() {
 async fn a_replayed_nonce_is_refused_inside_the_window() {
     let harness = harness().await;
     let device = join(&harness, "alpha", true, 12).await;
-    let first = config(&harness, &device).await;
+    // The same nonce, the same timestamp, the same body: a captured request sent
+    // again. The signed bytes are identical, which is exactly the replay.
+    let nonce = [42u8; 16];
+    let send = |harness: &Harness, device: &Device, ts: i64| {
+        let request = device.signed("GET", "/v1/config", "", ts, nonce);
+        let app = harness.app.clone();
+        async move { app.oneshot(request).await.unwrap() }
+    };
+
+    let first = send(&harness, &device, 1_000_000).await;
     assert_eq!(first.status(), StatusCode::OK);
 
-    let replay = harness
-        .app
-        .clone()
-        .oneshot(device.signed("GET", "/v1/config", "", 1_000_000, [42u8; 16]))
-        .await
-        .unwrap();
+    let replay = send(&harness, &device, 1_000_000).await;
     assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(error_code(replay).await, "nonce_reused");
 
-    harness.clock.0.store(1_000_000 + 121, Ordering::Relaxed);
-    let after_the_window = config(&harness, &device).await;
+    // A minute and a bit later the entry has aged out of the cache. The request
+    // is freshly stamped, so it is inside the clock window, and the reused nonce
+    // is no longer remembered.
+    harness.clock.0.store(1_000_121, Ordering::Relaxed);
+    let after_the_window = send(&harness, &device, 1_000_121).await;
     assert_eq!(
         after_the_window.status(),
         StatusCode::OK,
