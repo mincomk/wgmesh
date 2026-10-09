@@ -93,7 +93,8 @@ fn device_from_row(row: &sqlx::sqlite::SqliteRow) -> StoreResult<DeviceRow> {
     })
 }
 
-const DEVICE_COLUMNS: &str = "id, device_key, network_id, name, wg_pubkey, api_pubkey, tunnel_ip, state";
+const DEVICE_COLUMNS: &str =
+    "id, device_key, network_id, name, wg_pubkey, api_pubkey, tunnel_ip, state";
 
 impl Store {
     // A SQLite in-memory database lives exactly as long as its pool, and a single
@@ -174,13 +175,15 @@ impl Store {
         mtu: i64,
         now: i64,
     ) -> StoreResult<i64> {
-        let row = sqlx::query("INSERT INTO networks (name, cidr, mtu, created_at) VALUES (?, ?, ?, ?) RETURNING id")
-            .bind(name)
-            .bind(cidr)
-            .bind(mtu)
-            .bind(now)
-            .fetch_one(&self.pool)
-            .await?;
+        let row = sqlx::query(
+            "INSERT INTO networks (name, cidr, mtu, created_at) VALUES (?, ?, ?, ?) RETURNING id",
+        )
+        .bind(name)
+        .bind(cidr)
+        .bind(mtu)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.try_get("id")?)
     }
 
@@ -233,11 +236,13 @@ impl Store {
 
     pub async fn revoke_join_token(&self, token: &str, now: i64) -> StoreResult<bool> {
         let hash = wgmesh_proto::signed::sha256_hex(token.as_bytes());
-        let done = sqlx::query("UPDATE join_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL")
-            .bind(now)
-            .bind(hash.as_bytes().to_vec())
-            .execute(&self.pool)
-            .await?;
+        let done = sqlx::query(
+            "UPDATE join_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
+        )
+        .bind(now)
+        .bind(hash.as_bytes().to_vec())
+        .execute(&self.pool)
+        .await?;
         Ok(done.rows_affected() == 1)
     }
 
@@ -287,18 +292,21 @@ impl Store {
     }
 
     pub async fn device(&self, device_key: &str) -> StoreResult<Option<DeviceRow>> {
-        let row = sqlx::query(&format!("SELECT {DEVICE_COLUMNS} FROM devices WHERE device_key = ?"))
-            .bind(device_key)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(&format!(
+            "SELECT {DEVICE_COLUMNS} FROM devices WHERE device_key = ?"
+        ))
+        .bind(device_key)
+        .fetch_optional(&self.pool)
+        .await?;
         row.as_ref().map(device_from_row).transpose()
     }
 
     pub async fn credential(&self, device_key: &str) -> StoreResult<Option<Credential>> {
-        let row = sqlx::query("SELECT device_key, api_pubkey, state FROM devices WHERE device_key = ?")
-            .bind(device_key)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row =
+            sqlx::query("SELECT device_key, api_pubkey, state FROM devices WHERE device_key = ?")
+                .bind(device_key)
+                .fetch_optional(&self.pool)
+                .await?;
         row.map(|row| {
             let state: String = row.try_get("state")?;
             let api_pubkey: Vec<u8> = row.try_get("api_pubkey")?;
@@ -335,12 +343,13 @@ impl Store {
         state: DeviceState,
         now: i64,
     ) -> StoreResult<bool> {
-        let done = sqlx::query("UPDATE devices SET state = ?, last_seen_at = ? WHERE device_key = ?")
-            .bind(state.as_str())
-            .bind(now)
-            .bind(device_key)
-            .execute(&self.pool)
-            .await?;
+        let done =
+            sqlx::query("UPDATE devices SET state = ?, last_seen_at = ? WHERE device_key = ?")
+                .bind(state.as_str())
+                .bind(now)
+                .bind(device_key)
+                .execute(&self.pool)
+                .await?;
         Ok(done.rows_affected() == 1)
     }
 
@@ -383,9 +392,10 @@ impl Store {
     }
 
     pub async fn audit_entries(&self) -> StoreResult<Vec<AuditEntry>> {
-        let rows = sqlx::query("SELECT ts, actor, action, device_id, detail FROM audit_log ORDER BY id")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query("SELECT ts, actor, action, device_id, detail FROM audit_log ORDER BY id")
+                .fetch_all(&self.pool)
+                .await?;
         rows.iter()
             .map(|row| {
                 Ok(AuditEntry {

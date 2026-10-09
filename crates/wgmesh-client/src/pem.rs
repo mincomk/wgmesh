@@ -7,7 +7,10 @@ const END: &str = "-----END CERTIFICATE-----";
 // an operator copied out of the proxy's configuration, and pinning has to accept
 // both, so the reader sniffs rather than making the caller say which it is.
 pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
-    let text = core::str::from_utf8(input).ok()?;
+    let Ok(text) = core::str::from_utf8(input) else {
+        // Binary input is already the DER a TLS layer would hand over.
+        return Some(input.to_vec());
+    };
     let Some(begin) = text.find(BEGIN) else {
         return Some(input.to_vec());
     };
@@ -22,8 +25,8 @@ pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn load(path: &std::path::Path) -> Result<Vec<u8>, String> {
-    let bytes = std::fs::read(path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let bytes =
+        std::fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     decode(&bytes).ok_or_else(|| format!("{} is neither a certificate nor PEM", path.display()))
 }
 

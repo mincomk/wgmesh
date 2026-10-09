@@ -26,7 +26,11 @@ fn run(args: &[&str]) -> (bool, String) {
 fn trust_rotate_updates_the_pin_and_trust_show_reads_it_back() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("agent.toml");
-    fs::write(&config, "network = \"prod\"\ncoordinator = \"https://wgmesh.example.com\"\n").unwrap();
+    fs::write(
+        &config,
+        "network = \"prod\"\ncoordinator = \"https://wgmesh.example.com\"\n",
+    )
+    .unwrap();
     let config = config.to_string_lossy().into_owned();
 
     let (ok, text) = run(&["trust", "show", "--config", &config]);
@@ -69,7 +73,13 @@ fn trust_rotate_updates_the_pin_and_trust_show_reads_it_back() {
         text.contains(PIN_B) && !text.contains(PIN_A),
         "the pin moved to the new certificate and the old value is gone: {text}"
     );
-    assert_eq!(fs::read_to_string(&config).unwrap().matches("coordinator_spki_sha256").count(), 1);
+    assert_eq!(
+        fs::read_to_string(&config)
+            .unwrap()
+            .matches("coordinator_spki_sha256")
+            .count(),
+        1
+    );
 }
 
 #[test]

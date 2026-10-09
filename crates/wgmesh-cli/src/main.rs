@@ -5,7 +5,11 @@ use clap::{Parser, Subcommand};
 use wgmesh_cli::trust::{TrustArgs, run as run_trust};
 
 #[derive(Debug, Parser)]
-#[command(name = "wgmesh", version, about = "A mesh over WireGuard, with a coordinator.")]
+#[command(
+    name = "wgmesh",
+    version,
+    about = "A mesh over WireGuard, with a coordinator."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

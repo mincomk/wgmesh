@@ -68,8 +68,9 @@ impl TrustStore {
     }
 
     fn read(&self) -> Result<String, TrustError> {
-        fs::read_to_string(&self.path)
-            .map_err(|error| TrustError::Io(format!("cannot read {}: {error}", self.path.display())))
+        fs::read_to_string(&self.path).map_err(|error| {
+            TrustError::Io(format!("cannot read {}: {error}", self.path.display()))
+        })
     }
 
     pub fn pinned(&self) -> Option<String> {
@@ -148,7 +149,8 @@ mod tests {
 
     #[test]
     fn rotate_records_the_pin_and_leaves_the_rest_of_the_file_alone() {
-        let (_dir, store) = config("network = \"prod\"\ncoordinator = \"https://wgmesh.example.com\"\n");
+        let (_dir, store) =
+            config("network = \"prod\"\ncoordinator = \"https://wgmesh.example.com\"\n");
         let rotation = store.rotate(CERT_A).unwrap();
         assert_eq!(rotation.previous, None);
         assert_eq!(rotation.current, PIN_A);
@@ -188,7 +190,11 @@ mod tests {
         ));
 
         let text = fs::read_to_string(store.path()).unwrap();
-        assert_eq!(text.matches(PIN_KEY).count(), 1, "the pin line is replaced, not duplicated");
+        assert_eq!(
+            text.matches(PIN_KEY).count(),
+            1,
+            "the pin line is replaced, not duplicated"
+        );
     }
 
     #[test]

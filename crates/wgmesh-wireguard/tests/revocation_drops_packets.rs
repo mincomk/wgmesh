@@ -9,8 +9,8 @@ use axum::http::{Request, StatusCode};
 use serde_json::Value;
 use tower::ServiceExt;
 
-use wgmesh_core::{Allowed, Change, DeviceId, PeerSpec, PublicKey, diff};
 use wgmesh_coordinator::{ADMIN_HEADER, AdminAuth, AppState, Clock, Store, router};
+use wgmesh_core::{Allowed, Change, DeviceId, PeerSpec, PublicKey, diff};
 use wgmesh_ports::{InterfaceSpec, WireGuard};
 use wgmesh_wireguard::testing::FakeWireGuard;
 
@@ -58,7 +58,16 @@ async fn join(harness: &Harness, name: &str, seed: u8) -> Device {
     let token = format!("WGMESH-REVOCATION-{name}");
     harness
         .store
-        .create_join_token(harness.network, "device", &token, 1, true, 2_000_000, "admin", 1_000_000)
+        .create_join_token(
+            harness.network,
+            "device",
+            &token,
+            1,
+            true,
+            2_000_000,
+            "admin",
+            1_000_000,
+        )
         .await
         .unwrap();
     let secret = [seed; 32];
@@ -157,7 +166,13 @@ async fn a_revoked_device_leaves_the_peer_list_and_its_packets_are_dropped() {
     let alpha = join(&harness, "alpha", 31).await;
     let beta = join(&harness, "beta", 42).await;
 
-    let tunnel_ip = harness.store.device(&beta.key).await.unwrap().unwrap().tunnel_ip;
+    let tunnel_ip = harness
+        .store
+        .device(&beta.key)
+        .await
+        .unwrap()
+        .unwrap()
+        .tunnel_ip;
     let dropped = address(&tunnel_ip);
 
     let wireguard = FakeWireGuard::new();
@@ -174,13 +189,15 @@ async fn a_revoked_device_leaves_the_peer_list_and_its_packets_are_dropped() {
     assert_eq!(before["keyset"].as_array().unwrap().len(), 1);
     let desired = desired_from(&before);
     assert_eq!(desired.len(), 1);
-    wireguard.apply(&diff(&desired, &wireguard.peers())).unwrap();
+    wireguard
+        .apply(&diff(&desired, &wireguard.peers()))
+        .unwrap();
     assert_eq!(
-        wireguard.accepts_from(dropped),
+        wireguard.accepts_from(dropped.clone()),
         Some(DeviceId(1)),
         "before the revocation the peer's packets are accepted"
     );
-    assert_eq!(wireguard.route_to(dropped), Some(DeviceId(1)));
+    assert_eq!(wireguard.route_to(dropped.clone()), Some(DeviceId(1)));
 
     let revoked = harness
         .app
@@ -209,9 +226,9 @@ async fn a_revoked_device_leaves_the_peer_list_and_its_packets_are_dropped() {
 
     assert!(wireguard.peers().is_empty());
     assert_eq!(
-        wireguard.accepts_from(dropped),
+        wireguard.accepts_from(dropped.clone()),
         None,
         "the revoked peer's packets are dropped: no peer claims its address any more"
     );
-    assert_eq!(wireguard.route_to(dropped), None);
+    assert_eq!(wireguard.route_to(dropped.clone()), None);
 }

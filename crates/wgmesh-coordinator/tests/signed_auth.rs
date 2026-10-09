@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -24,6 +24,7 @@ struct Harness {
     app: Router,
     store: Store,
     clock: Arc<FixedClock>,
+    requests: AtomicU64,
     admin: String,
     network: i64,
 }
@@ -34,7 +35,14 @@ struct Device {
 }
 
 impl Device {
-    fn signed(&self, method: &str, path: &str, body: &str, ts: i64, nonce: [u8; 16]) -> Request<Body> {
+    fn signed(
+        &self,
+        method: &str,
+        path: &str,
+        body: &str,
+        ts: i64,
+        nonce: [u8; 16],
+    ) -> Request<Body> {
         let message = canonical(method, path, body.as_bytes(), ts, &nonce);
         let signature = wgmesh_secrets::sign(&self.secret, &message);
         let header = format!(
@@ -69,6 +77,7 @@ async fn harness() -> Harness {
         app: router(state),
         store,
         clock,
+        requests: AtomicU64::new(1),
         admin,
         network,
     }
@@ -90,7 +99,16 @@ async fn join(harness: &Harness, name: &str, auto_approve: bool, seed: u8) -> De
     let token = format!("WGMESH-TEST-TOKEN-{name}");
     harness
         .store
-        .create_join_token(harness.network, "device", &token, 1, auto_approve, 2_000_000, "admin", 1_000_000)
+        .create_join_token(
+            harness.network,
+            "device",
+            &token,
+            1,
+            auto_approve,
+            2_000_000,
+            "admin",
+            1_000_000,
+        )
         .await
         .unwrap();
     let secret = [seed; 32];
@@ -139,11 +157,21 @@ async fn admin(harness: &Harness, path: &str) -> axum::response::Response {
         .unwrap()
 }
 
+// Every request needs its own nonce: reusing one is a replay, and the
+// coordinator is right to refuse it, so the helper counts instead.
 async fn config(harness: &Harness, device: &Device) -> axum::response::Response {
+    let mut nonce = [0u8; 16];
+    nonce[..8].copy_from_slice(&harness.requests.fetch_add(1, Ordering::Relaxed).to_le_bytes());
     harness
         .app
         .clone()
-        .oneshot(device.signed("GET", "/v1/config", "", harness.clock.0.load(Ordering::Relaxed), [42u8; 16]))
+        .oneshot(device.signed(
+            "GET",
+            "/v1/config",
+            "",
+            harness.clock.0.load(Ordering::Relaxed),
+            nonce,
+        ))
         .await
         .unwrap()
 }
@@ -193,10 +221,9 @@ async fn a_request_with_a_wrong_signature_is_refused() {
             encode_base64(&signature)
         )
     };
-    request.headers_mut().insert(
-        "authorization",
-        tampered.parse().unwrap(),
-    );
+    request
+        .headers_mut()
+        .insert("authorization", tampered.parse().unwrap());
     let response = harness.app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(error_code(response).await, "bad_signature");
@@ -353,7 +380,10 @@ async fn the_database_stores_only_hashes_and_public_keys() {
         "relay_traffic",
         "audit_log",
     ] {
-        assert!(tables.iter().any(|table| table == expected), "{expected} is missing");
+        assert!(
+            tables.iter().any(|table| table == expected),
+            "{expected} is missing"
+        );
     }
 
     let mut columns = harness.store.columns("devices").await.unwrap();
@@ -382,7 +412,14 @@ async fn the_database_stores_only_hashes_and_public_keys() {
         "the join token itself must never have a column"
     );
 
-    let forbidden = ["token", "secret", "password", "private_key", "api_secret", "psk"];
+    let forbidden = [
+        "token",
+        "secret",
+        "password",
+        "private_key",
+        "api_secret",
+        "psk",
+    ];
     for table in &tables {
         if table == "_sqlx_migrations" {
             continue;
@@ -402,10 +439,17 @@ async fn the_database_stores_only_hashes_and_public_keys() {
     assert_ne!(stored[0], token);
     assert_eq!(stored[0].len(), 64);
 
-    let devices = harness.store.devices_in_state(harness.network, wgmesh_coordinator::DeviceState::Active).await.unwrap();
+    let devices = harness
+        .store
+        .devices_in_state(harness.network, wgmesh_coordinator::DeviceState::Active)
+        .await
+        .unwrap();
     assert_eq!(devices.len(), 1);
     assert_eq!(devices[0].api_pubkey.len(), 32);
-    assert_eq!(devices[0].api_pubkey, wgmesh_secrets::public_key(&device.secret));
+    assert_eq!(
+        devices[0].api_pubkey,
+        wgmesh_secrets::public_key(&device.secret)
+    );
 }
 
 #[tokio::test]

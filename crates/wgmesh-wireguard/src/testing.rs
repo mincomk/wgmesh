@@ -21,13 +21,13 @@ pub struct FakeWireGuard {
     state: Mutex<State>,
 }
 
-fn covers(allowed: &Allowed, address: Allowed) -> Option<u8> {
+fn covers(allowed: &Allowed, address: &Allowed) -> Option<u8> {
     match (allowed, address) {
         (Allowed::V4(network, length), Allowed::V4(bytes, _)) => {
-            matches_prefix(network, &bytes, *length).then_some(*length)
+            matches_prefix(network, bytes, *length).then_some(*length)
         }
         (Allowed::V6(network, length), Allowed::V6(bytes, _)) => {
-            matches_prefix(network, &bytes, *length).then_some(*length)
+            matches_prefix(network, bytes, *length).then_some(*length)
         }
         _ => None,
     }
@@ -79,7 +79,7 @@ impl FakeWireGuard {
         let mut best: Option<(u8, DeviceId)> = None;
         for (id, spec) in &state.peers {
             for allowed in &spec.allowed {
-                if let Some(length) = covers(allowed, address) {
+                if let Some(length) = covers(allowed, &address) {
                     let better = match best {
                         None => true,
                         Some((best_length, _)) => length > best_length,
@@ -164,7 +164,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use wgmesh_core::{diff, PublicKey};
+    use wgmesh_core::{PublicKey, diff};
 
     fn spec(id: u32, address: [u8; 4]) -> PeerSpec {
         PeerSpec {
@@ -190,21 +190,38 @@ mod tests {
         let wireguard = FakeWireGuard::new();
         wireguard.ensure_interface(&interface()).unwrap();
         wireguard
-            .apply(&[Change::Add(spec(1, [10, 77, 0, 7])), Change::Add(spec(2, [10, 77, 0, 8]))])
+            .apply(&[
+                Change::Add(spec(1, [10, 77, 0, 7])),
+                Change::Add(spec(2, [10, 77, 0, 8])),
+            ])
             .unwrap();
-        assert_eq!(wireguard.accepts_from(Allowed::V4([10, 77, 0, 7], 32)), Some(DeviceId(1)));
-        assert_eq!(wireguard.route_to(Allowed::V4([10, 77, 0, 8], 32)), Some(DeviceId(2)));
-        assert_eq!(wireguard.accepts_from(Allowed::V4([10, 77, 0, 9], 32)), None);
+        assert_eq!(
+            wireguard.accepts_from(Allowed::V4([10, 77, 0, 7], 32)),
+            Some(DeviceId(1))
+        );
+        assert_eq!(
+            wireguard.route_to(Allowed::V4([10, 77, 0, 8], 32)),
+            Some(DeviceId(2))
+        );
+        assert_eq!(
+            wireguard.accepts_from(Allowed::V4([10, 77, 0, 9], 32)),
+            None
+        );
     }
 
     #[test]
     fn removing_a_peer_takes_its_addresses_with_it() {
         let wireguard = FakeWireGuard::new();
         wireguard.ensure_interface(&interface()).unwrap();
-        wireguard.apply(&[Change::Add(spec(1, [10, 77, 0, 7]))]).unwrap();
+        wireguard
+            .apply(&[Change::Add(spec(1, [10, 77, 0, 7]))])
+            .unwrap();
         wireguard.apply(&[Change::Remove(DeviceId(1))]).unwrap();
         assert!(wireguard.peers().is_empty());
-        assert_eq!(wireguard.accepts_from(Allowed::V4([10, 77, 0, 7], 32)), None);
+        assert_eq!(
+            wireguard.accepts_from(Allowed::V4([10, 77, 0, 7], 32)),
+            None
+        );
     }
 
     #[test]
@@ -233,7 +250,10 @@ mod tests {
         assert_eq!(changes, vec![Change::Remove(DeviceId(2))]);
         wireguard.apply(&changes).unwrap();
         assert_eq!(wireguard.route_to(Allowed::V4([10, 77, 0, 8], 32)), None);
-        assert_eq!(wireguard.accepts_from(Allowed::V4([10, 77, 0, 7], 32)), Some(DeviceId(1)));
+        assert_eq!(
+            wireguard.accepts_from(Allowed::V4([10, 77, 0, 7], 32)),
+            Some(DeviceId(1))
+        );
     }
 
     #[test]
@@ -245,8 +265,14 @@ mod tests {
         wireguard
             .apply(&[Change::Add(gateway), Change::Add(spec(1, [10, 77, 0, 7]))])
             .unwrap();
-        assert_eq!(wireguard.route_to(Allowed::V4([10, 77, 0, 7], 32)), Some(DeviceId(1)));
-        assert_eq!(wireguard.route_to(Allowed::V4([8, 8, 8, 8], 32)), Some(DeviceId(9)));
+        assert_eq!(
+            wireguard.route_to(Allowed::V4([10, 77, 0, 7], 32)),
+            Some(DeviceId(1))
+        );
+        assert_eq!(
+            wireguard.route_to(Allowed::V4([8, 8, 8, 8], 32)),
+            Some(DeviceId(9))
+        );
         assert_eq!(wireguard.route_to(Allowed::V6([0; 16], 0)), None);
     }
 }

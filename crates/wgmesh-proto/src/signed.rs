@@ -15,8 +15,13 @@ pub fn sha256_hex(body: &[u8]) -> String {
 pub fn canonical(method: &str, path: &str, body: &[u8], ts: i64, nonce: &[u8]) -> Vec<u8> {
     let mut message = Vec::with_capacity(96 + body.len());
     message.extend_from_slice(VERSION_TAG.as_bytes());
-    for field in [method, path, &sha256_hex(body), &ts.to_string(), &Base64::encode_string(nonce)]
-    {
+    for field in [
+        method,
+        path,
+        &sha256_hex(body),
+        &ts.to_string(),
+        &Base64::encode_string(nonce),
+    ] {
         message.push(b'\n');
         message.extend_from_slice(field.as_bytes());
     }
@@ -71,9 +76,13 @@ impl SignedRequest {
         if parts.next() != Some(SCHEME) {
             return Err(HeaderError::WrongScheme);
         }
-        let (Some(device_id), Some(ts), Some(nonce), Some(signature), None) =
-            (parts.next(), parts.next(), parts.next(), parts.next(), parts.next())
-        else {
+        let (Some(device_id), Some(ts), Some(nonce), Some(signature), None) = (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) else {
             return Err(HeaderError::WrongPartCount);
         };
         let ts = ts.parse::<i64>().map_err(|_| HeaderError::Timestamp)?;
@@ -127,7 +136,13 @@ mod tests {
 
     #[test]
     fn the_canonical_string_is_exactly_the_version_tag_five_fields() {
-        let message = canonical("POST", "/v1/config", b"{\"a\":1}", 1_760_000_000, &[1, 2, 3]);
+        let message = canonical(
+            "POST",
+            "/v1/config",
+            b"{\"a\":1}",
+            1_760_000_000,
+            &[1, 2, 3],
+        );
         let body_hash = sha256_hex(b"{\"a\":1}");
         let expected = format!(
             "WGMESHv1\nPOST\n/v1/config\n{body_hash}\n1760000000\n{}",
@@ -171,7 +186,10 @@ mod tests {
             SignedRequest::parse("Bearer token"),
             Err(HeaderError::WrongScheme)
         );
-        assert_eq!(SignedRequest::parse("WGMESH a b c"), Err(HeaderError::WrongPartCount));
+        assert_eq!(
+            SignedRequest::parse("WGMESH a b c"),
+            Err(HeaderError::WrongPartCount)
+        );
         assert_eq!(
             SignedRequest::parse("WGMESH d 1 2 3 4"),
             Err(HeaderError::WrongPartCount)

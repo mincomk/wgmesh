@@ -30,7 +30,9 @@ pub enum TrustCommand {
         from_cert: PathBuf,
     },
     // The pin a certificate would produce, without touching any configuration.
-    Pin { certificate: PathBuf },
+    Pin {
+        certificate: PathBuf,
+    },
 }
 
 pub fn run(args: &TrustArgs) -> Result<String, String> {
@@ -46,7 +48,9 @@ pub fn run(args: &TrustArgs) -> Result<String, String> {
         TrustCommand::Rotate { config, from_cert } => {
             let store = TrustStore::new(config);
             let certificate = load_certificate(from_cert)?;
-            let rotation = store.rotate(&certificate).map_err(|error| error.to_string())?;
+            let rotation = store
+                .rotate(&certificate)
+                .map_err(|error| error.to_string())?;
             let previous = rotation
                 .previous
                 .clone()

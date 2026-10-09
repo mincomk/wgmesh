@@ -303,9 +303,7 @@ async fn join(State(state): State<AppState>, body: Bytes) -> Result<Json<JoinRes
         })
         .await
         .map_err(|error| match error {
-            StoreError::Sql(sqlx::Error::Database(database))
-                if database.is_unique_violation() =>
-            {
+            StoreError::Sql(sqlx::Error::Database(database)) if database.is_unique_violation() => {
                 ApiError::conflict("already_enrolled", "this public key is already enrolled")
             }
             other => ApiError::store(other),
@@ -370,12 +368,15 @@ async fn config(
         .collect();
     let keyset: Vec<String> = peers.iter().map(|peer| peer.wg_pubkey.clone()).collect();
 
-    state
-        .store
-        .touch_device(&credential.device_id, now)
-        .await?;
+    state.store.touch_device(&credential.device_id, now).await?;
 
-    let etag = format!("cfg-{}-{}", peers.len(), sha256_hex(keyset.join(",").as_bytes()).get(..12).unwrap_or("000000000000"));
+    let etag = format!(
+        "cfg-{}-{}",
+        peers.len(),
+        sha256_hex(keyset.join(",").as_bytes())
+            .get(..12)
+            .unwrap_or("000000000000")
+    );
 
     Ok(Json(ConfigSnapshot {
         etag,

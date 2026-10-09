@@ -34,8 +34,13 @@ pub enum AuthError {
     Missing,
     Malformed(HeaderError),
     UnknownIdentity(String),
-    NotActive { device_id: String, state: DeviceState },
-    ClockSkew { skew_secs: i64 },
+    NotActive {
+        device_id: String,
+        state: DeviceState,
+    },
+    ClockSkew {
+        skew_secs: i64,
+    },
     NonceReused,
     BadSignature,
 }
@@ -63,10 +68,17 @@ impl core::fmt::Display for AuthError {
             Self::Malformed(error) => write!(f, "the Authorization header is malformed: {error}"),
             Self::UnknownIdentity(id) => write!(f, "no device is enrolled under {id}"),
             Self::NotActive { device_id, state } => {
-                write!(f, "device {device_id} is {} and may not call this API", state.as_str())
+                write!(
+                    f,
+                    "device {device_id} is {} and may not call this API",
+                    state.as_str()
+                )
             }
             Self::ClockSkew { skew_secs } => {
-                write!(f, "the request timestamp is {skew_secs} seconds away from now")
+                write!(
+                    f,
+                    "the request timestamp is {skew_secs} seconds away from now"
+                )
             }
             Self::NonceReused => f.write_str("this nonce was already used"),
             Self::BadSignature => f.write_str("the signature does not match the request"),
@@ -267,7 +279,15 @@ mod tests {
     fn a_missing_header_is_refused() {
         let nonces = NonceCache::default();
         assert_eq!(
-            authenticate(None, "GET", "/v1/config", b"", 1000, &nonces, &directory(DeviceState::Active)),
+            authenticate(
+                None,
+                "GET",
+                "/v1/config",
+                b"",
+                1000,
+                &nonces,
+                &directory(DeviceState::Active)
+            ),
             Err(AuthError::Missing)
         );
     }
@@ -278,13 +298,29 @@ mod tests {
         let signed = request([2u8; NONCE_BYTES], 1000, "/v1/config");
         let header = signed.format();
         assert!(
-            authenticate(Some(&header), "GET", "/v1/config", b"", 1000, &nonces, &directory(DeviceState::Active))
-                .is_ok()
+            authenticate(
+                Some(&header),
+                "GET",
+                "/v1/config",
+                b"",
+                1000,
+                &nonces,
+                &directory(DeviceState::Active)
+            )
+            .is_ok()
         );
         assert_eq!(
-            authenticate(Some(&header), "GET", "/v1/config", b"", 1000, &nonces, &directory(DeviceState::Active))
-                .unwrap_err()
-                .code(),
+            authenticate(
+                Some(&header),
+                "GET",
+                "/v1/config",
+                b"",
+                1000,
+                &nonces,
+                &directory(DeviceState::Active)
+            )
+            .unwrap_err()
+            .code(),
             "nonce_reused"
         );
     }
