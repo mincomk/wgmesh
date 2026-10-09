@@ -32,14 +32,14 @@ const REPORT_AFTER: Duration = Duration::from_secs(5);
 ///
 /// A wait is not a sleep: it polls for a condition the lab itself produces, so
 /// on a quiet machine it returns as soon as the condition holds and the budget
-/// is never approached. The budget exists for the
-/// machine, not for the scenario: `cargo test -p wgmesh-conformance` can be run
-/// with the crate's three scenario binaries at once, each already running its
-/// scenarios on their own threads, and CI runs the whole workspace on a runner
-/// that may be smaller than this one. A budget a loaded machine can exhaust is
-/// the bug this type exists to make impossible; when one does run out, the wait
-/// says so -- which evidence was missing, and how long it was given -- rather
-/// than leaving a reader to guess whether the lab was slow or broken.
+/// is never approached. The budget exists for the machine, not for the scenario:
+/// cargo runs a crate's test targets one after another, but the three scenario
+/// binaries here can be run at once by hand -- each already running its scenarios
+/// on their own threads -- and CI runs the workspace on a runner that may be
+/// smaller than this one. A budget a loaded machine can exhaust is the bug this
+/// type exists to make impossible; when one does run out, the wait says so --
+/// which evidence was missing, and how long it was given -- rather than leaving a
+/// reader to guess whether the lab was slow or broken.
 #[derive(Clone, Copy, Debug)]
 pub struct Evidence {
     /// What the scenario is waiting to see, in the words a timeout prints.

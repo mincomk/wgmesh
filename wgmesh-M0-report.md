@@ -382,12 +382,12 @@ claims otherwise.
   prints which evidence it was missing and what it had been given. Evidence means
   the fact the state machine recorded, wherever one exists: the cut pair's
   assignment count is a counter and not a sample, and since the fleet wait was
-  reworked, so are the two facts it waits on before the kill — a probe that gave
-  up (`fallback_ms`) and the re-homing that follows one — because a sampled
-  `up()` is exactly what a loaded machine can take away. A claim that *is* about
-  liveness (the relay carrying traffic before the kill, the re-homed pair being
-  reachable again) is waited for in its own right, with its own budget, rather
-  than taken as a reading at one instant.
+  reworked, so is the fact that wait waits on — a punch that gave up
+  (`fallback_ms`) — because a sampled `up()` is exactly what a loaded machine can
+  take away. A claim that *is* about liveness (the relay carrying traffic before
+  the kill, the re-homing after it, the re-homed pair being reachable again) is
+  waited for in its own right, with its own budget, rather than taken as a reading
+  at one instant.
 - The three scenario binaries do **not** run at once under `cargo test`: cargo
   runs a crate's test targets one after another, and `cargo test -p
   wgmesh-conformance` is the sum of its parts (measured: 0.2s + 0.7s + 11.2s +
