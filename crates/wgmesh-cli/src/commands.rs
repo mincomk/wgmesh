@@ -13,7 +13,8 @@ use wgmesh_ports::{Clock, JoinToken, Routes, StateStore, WireGuard};
 use crate::adapters::{FileSecrets, FileState, encode_public_key};
 use crate::agent;
 use crate::cli::{
-    Cli, Command, ConfigAction, KeyAction, KeyKind, RoutesAction, StateAction, TrustAction,
+    Cli, Command, ConfigAction, DoctorArgs, KeyAction, KeyKind, RoutesAction, StateAction,
+    TrustAction,
 };
 use crate::container::{Container, Paths};
 use crate::error::{CliError, Problem, Severity};
@@ -100,7 +101,7 @@ pub async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Peers(json) => peers(&cli, json.json),
         Command::Routes(args) => routes(&cli, args),
         Command::Relays(json) => relays(&cli, json.json),
-        Command::Doctor(json) => doctor(&cli, json.json),
+        Command::Doctor(args) => doctor(&cli, args),
         Command::Pin(args) => crate::container::pin_unavailable(&args.url, args.json),
     }
 }
@@ -581,8 +582,9 @@ fn relays(cli: &Cli, json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn doctor(cli: &Cli, json: bool) -> Result<(), CliError> {
+fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
     let (settings, problems) = load(cli)?;
+    let checked = settings.clone();
     let exit_peer = settings.peers.exit_peer.clone();
     let allowed_ips = settings.peers.allowed_ips;
     let forwarding_enabled = settings.forwarding.enabled;
@@ -650,33 +652,55 @@ fn doctor(cli: &Cli, json: bool) -> Result<(), CliError> {
             detail: error,
         }),
     }
-    checks.push(CheckView {
-        name: "forwarding".to_string(),
-        status: if forwarding_enabled { "warn" } else { "ok" }.to_string(),
-        detail: if forwarding_enabled {
-            "forwarding.enabled is on: this device routes for others, so the kernel's ip_forward \
-             has to be set"
-                .to_string()
-        } else {
-            "off: this device does not route for others".to_string()
-        },
-    });
-    if !exit_peer.is_empty() {
-        checks.push(CheckView {
-            name: "exit peer".to_string(),
-            status: "warn".to_string(),
-            detail: format!(
-                "peers.exit_peer names {exit_peer:?}; a name is resolved against the coordinator's \
-                 peer list, which this build does not have yet, so the policy in force is \
-                 {allowed_ips:?}"
+    // The routing and forwarding checks, over whatever this build can actually see.
+    //
+    // The peer-dependent half of them needs the coordinator's answer: which peers exist and which
+    // bands they advertise. A `--snapshot` supplies it; without one the checks that need it are
+    // skipped and said to be skipped, rather than passed silently.
+    let (snapshot, snapshot_note) = match &args.snapshot {
+        Some(path) => match crate::doctor::load_snapshot(path) {
+            Ok(snapshot) => (Some(snapshot), None),
+            Err(error) => (
+                None,
+                Some(format!("--snapshot {path:?} could not be read: {error}")),
             ),
+        },
+        None => (
+            None,
+            Some(
+                "no --snapshot was given: which peers exist and which bands they advertise come \
+                 from the coordinator, and this build has no HTTPS client, so those checks did \
+                 not run"
+                    .to_string(),
+            ),
+        ),
+    };
+    let report = crate::doctor::run(&checked, snapshot.as_ref(), &crate::doctor::ProcSysctl);
+    for finding in &report.findings {
+        checks.push(CheckView {
+            name: finding.code.as_str().to_string(),
+            status: match finding.severity {
+                wgmesh_core::doctor::Severity::Error => "fail",
+                wgmesh_core::doctor::Severity::Warning => "warn",
+                wgmesh_core::doctor::Severity::Info => "ok",
+            }
+            .to_string(),
+            detail: format!("{} — {}", finding.summary, finding.remedy),
         });
     }
+    for note in report.notes.iter().chain(snapshot_note.iter()) {
+        checks.push(CheckView {
+            name: "routing".to_string(),
+            status: "warn".to_string(),
+            detail: note.clone(),
+        });
+    }
+    let _ = (forwarding_enabled, &exit_peer, allowed_ips);
     let view = DoctorView {
         schema: output::SCHEMA,
         checks,
     };
-    if json {
+    if args.json {
         println!("{}", output::json(&view));
     } else {
         print!("{}", view.human());

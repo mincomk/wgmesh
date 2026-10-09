@@ -51,6 +51,19 @@ pub struct JsonFlag {
 }
 
 #[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Print one JSON document instead of the human form.
+    #[arg(long)]
+    pub json: bool,
+
+    /// A coordinator snapshot — the body of `GET /v1/config` — to check the peers and the bands
+    /// against. Without one the peer-dependent checks cannot run: this build has no HTTPS client
+    /// yet, and the state file does not carry the bands a peer advertises.
+    #[arg(long, value_name = "PATH")]
+    pub snapshot: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Args)]
 pub struct JoinArgs {
     /// The one-time enrollment token.
     #[arg(long, value_name = "TOKEN", conflicts_with = "token_file")]
@@ -209,7 +222,7 @@ pub enum Command {
     /// Show or rotate the pinned coordinator certificate.
     Trust(TrustArgs),
     /// Diagnose configuration, capabilities and routing.
-    Doctor(JsonFlag),
+    Doctor(DoctorArgs),
     /// Compute the SPKI pin of a coordinator URL.
     Pin(PinArgs),
 }

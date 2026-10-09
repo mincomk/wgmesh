@@ -143,6 +143,7 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "clap",
             "serde",
             "serde_json",
+            "thiserror",
             "tokio",
             "tracing",
             "tracing-subscriber",
