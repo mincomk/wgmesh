@@ -1,8 +1,8 @@
-//! The glue: what turns a store that speaks files into a store that speaks `wgmesh-ports`.
-//!
-//! Nothing above this module knows how a key is written or what the state file looks like. The
-//! two wrappers here are the whole of the translation, and they are deliberately the only place a
-//! key is read and the only place a state document is turned into the state the use cases hold.
+// The glue: what turns a store that speaks files into a store that speaks `wgmesh-ports`.
+//
+// Nothing above this module knows how a key is written or what the state file looks like. The
+// two wrappers here are the whole of the translation, and they are deliberately the only place a
+// key is read and the only place a state document is turned into the state the use cases hold.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

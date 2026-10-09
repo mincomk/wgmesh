@@ -1,7 +1,7 @@
-//! The documents `wgmesh` prints, and the human form of the same facts.
-//!
-//! Every `--json` command prints one of these and nothing else on stdout, so a pipeline can read
-//! it with `jq` and never has to skip a log line.
+// The documents `wgmesh` prints, and the human form of the same facts.
+//
+// Every `--json` command prints one of these and nothing else on stdout, so a pipeline can read
+// it with `jq` and never has to skip a log line.
 
 use serde::Serialize;
 

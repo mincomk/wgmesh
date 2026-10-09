@@ -1,4 +1,4 @@
-//! The daemon: the lock, the startup sequence, and the loop that keeps the mesh converged.
+// The daemon: the lock, the startup sequence, and the loop that keeps the mesh converged.
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;

@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-//! The output contract of the `wgmesh` binary, held still.
-//!
-//! These assertions are the contract in `docs/cli-contract.md`: if one of them changes, the
-//! contract changed, and the scripts that read this output broke with it.
+// The output contract of the `wgmesh` binary, held still.
+//
+// These assertions are the contract in `docs/cli-contract.md`: if one of them changes, the
+// contract changed, and the scripts that read this output broke with it.
 
 use std::fs;
 use std::path::Path;

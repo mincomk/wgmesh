@@ -1,13 +1,13 @@
-//! The offline backend: a coordination plane and a WireGuard device that live in this process.
-//!
-//! Selected with `--backend simulated`. It exists so the whole pipeline — enroll, converge,
-//! status, route planning — can be exercised where a kernel WireGuard device cannot be: inside a
-//! container without `CAP_NET_ADMIN`, and in CI. It is a test double that ships in the binary, and
-//! it says so wherever it is used.
-//!
-//! What it does not do: touch a kernel, open a socket, or pretend a packet moved. Peers, routes
-//! and handshakes are records the daemon writes down, and `wgmesh status` reads them back from the
-//! state file exactly as it would from a kernel.
+// The offline backend: a coordination plane and a WireGuard device that live in this process.
+//
+// Selected with `--backend simulated`. It exists so the whole pipeline — enroll, converge,
+// status, route planning — can be exercised where a kernel WireGuard device cannot be: inside a
+// container without `CAP_NET_ADMIN`, and in CI. It is a test double that ships in the binary, and
+// it says so wherever it is used.
+//
+// What it does not do: touch a kernel, open a socket, or pretend a packet moved. Peers, routes
+// and handshakes are records the daemon writes down, and `wgmesh status` reads them back from the
+// state file exactly as it would from a kernel.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;

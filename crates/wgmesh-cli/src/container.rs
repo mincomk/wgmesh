@@ -1,8 +1,8 @@
-//! The one place the concrete adapters meet the use cases.
-//!
-//! Everything above this module talks in `wgmesh-ports` traits and `wgmesh-core` values;
-//! everything below it is a file or a device. `Container::new` decides which adapters a given
-//! configuration needs, and this is the only module that may name them.
+// The one place the concrete adapters meet the use cases.
+//
+// Everything above this module talks in `wgmesh-ports` traits and `wgmesh-core` values;
+// everything below it is a file or a device. `Container::new` decides which adapters a given
+// configuration needs, and this is the only module that may name them.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

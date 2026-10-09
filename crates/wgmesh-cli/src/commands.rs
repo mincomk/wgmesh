@@ -1,8 +1,8 @@
-//! The commands, one function each.
-//!
-//! They print, they return an exit code, and they do nothing else: every decision they make is a
-//! call into the container, and every fact they print comes from the configuration, the state file
-//! or the device.
+// The commands, one function each.
+//
+// They print, they return an exit code, and they do nothing else: every decision they make is a
+// call into the container, and every fact they print comes from the configuration, the state file
+// or the device.
 
 use std::path::Path;
 
