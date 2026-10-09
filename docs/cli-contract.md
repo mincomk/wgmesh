@@ -6,12 +6,18 @@ read this output cannot see the commit that broke them, so the test is where the
 
 ## Where the configuration comes from
 
-Three layers, in increasing precedence, resolved before any command acts:
+Two layers, in increasing precedence, resolved before any command acts:
 
 1. the file named by `--config` (default `/etc/wgmesh/agent.toml`), when it exists;
 2. the environment, as `WGMESH__<SECTION>__<KEY>` — the section and the key separated by a double
-   underscore (`WGMESH__TRAVERSAL__KEEPALIVE_SECS=40`);
-3. the command line.
+   underscore (`WGMESH__TRAVERSAL__KEEPALIVE_SECS=40`) — which wins over the file.
+
+The flags are not a third layer. `--config` names the file, `--state-dir` overrides the state
+directory after resolution, and `--token`/`--token-file` are `join`'s own inputs. `wgmesh-config`
+can resolve a flag layer; no command passes one yet.
+
+`[log] level` decides what goes to stderr (`WGMESH__LOG__LEVEL` overrides it, and is read as a
+whole filter expression when it is set).
 
 A configuration file that is not there is not an error: the defaults are a complete configuration,
 which is what makes `config defaults`, `key show` and `state reset` work on a host that has never
@@ -70,9 +76,9 @@ known, `yes`/`no` for a boolean.
 | `doctor [--json]` | `checks[]{name,status,detail}` | `<status> <name> <detail>` |
 | `pin <url> [--json]` | `url`, `pin`, `error` | — |
 
-### `peer` objects, wherever they appear
+### `peer` objects
 
-`status`, `peers` and the state share one peer shape:
+`status` and `peers` print each peer as:
 
 ```json
 {
@@ -88,12 +94,17 @@ inside 180 s is a direct path, an older one is relayed, none at all is unknown. 
 `last_handshake_unix`, `handshake_age_secs`, `rx_bytes` and `tx_bytes` are `null` when the device
 cannot say — which is the normal answer between a restart and the first handshake.
 
+The state file is narrower: `state show` holds `id`, `name`, `wg_pubkey`, `tunnel_ip`, `endpoint`,
+`path` and `last_handshake_unix` per peer — what the agent persisted, without the counters only the
+device can report. `status --json` prefers the device's own answer for both.
+
 ### `doctor`'s checks
 
-M0's `doctor` reuses the configuration validation rather than duplicating it, and reports five
-checks in a fixed order: `configuration`, `backend`, `state`, `wireguard key`, `forwarding`. Each
-carries `status` `ok`, `warn` or `fail`. A check that `fail`s exits `1` (`doctor found problems`);
-`warn` does not. NAT diagnosis and a routing check are M2's.
+M0's `doctor` reuses the configuration validation rather than duplicating it, and reports its
+checks in a fixed order: `configuration`, `backend`, `state`, `wireguard key`, `forwarding`, and —
+when `peers.exit_peer` names one — a sixth, `exit peer`. Each carries `status` `ok`, `warn` or
+`fail`. A check that `fail`s exits `1` (`doctor found problems`); `warn` does not. NAT diagnosis
+and a routing check are M2's.
 
 ### What the kernel backend does not do yet
 

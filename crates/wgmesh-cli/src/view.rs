@@ -132,7 +132,7 @@ impl StatusView {
 pub struct PeersView {
     /// The document schema.
     pub schema: u32,
-    /// `peer`, `any` or `exit-peer`.
+    /// `peer` or `any`.
     pub policy: String,
     /// The peer that carries the catch-all, when one does.
     pub exit_peer: Option<String>,

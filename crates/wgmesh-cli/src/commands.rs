@@ -25,8 +25,19 @@ use crate::view::{
 };
 
 /// Configure logging: everything goes to stderr, so stdout stays a single document.
+///
+/// The level is the one the resolved configuration names — `[log] level` in the file, which
+/// `WGMESH__LOG__LEVEL` overrides — rather than the environment variable alone, which is how a
+/// configuration file that asked for `debug` ended up logging at `info`. The variable keeps its
+/// second reading as a whole `tracing-subscriber` filter expression (`wgmesh=debug,info`), which
+/// is what it has to be for the environment layer to reach a schema that holds a level word.
 pub fn init_logging(cli: &Cli) {
-    let level = std::env::var("WGMESH__LOG__LEVEL").unwrap_or_else(|_| "info".to_string());
+    let level = match std::env::var("WGMESH__LOG__LEVEL") {
+        Ok(raw) if !raw.trim().is_empty() => raw,
+        _ => load(cli)
+            .map(|(settings, _problems)| level_word(settings.log.level).to_string())
+            .unwrap_or_else(|_| "info".to_string()),
+    };
     let filter = tracing_subscriber::EnvFilter::try_new(level)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::fmt()
@@ -34,7 +45,17 @@ pub fn init_logging(cli: &Cli) {
         .with_writer(std::io::stderr)
         .with_target(false)
         .try_init();
-    let _ = cli;
+}
+
+/// The filter directive `[log] level` names.
+fn level_word(level: wgmesh_config::LogLevel) -> &'static str {
+    match level {
+        wgmesh_config::LogLevel::Error => "error",
+        wgmesh_config::LogLevel::Warn => "warn",
+        wgmesh_config::LogLevel::Info => "info",
+        wgmesh_config::LogLevel::Debug => "debug",
+        wgmesh_config::LogLevel::Trace => "trace",
+    }
 }
 
 /// Run the command the command line asked for.
