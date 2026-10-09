@@ -109,6 +109,40 @@ sit behind a TLS terminator. Node certificates are pinned by SPKI
 (`settings.coordinator.spki_sha256`), and ACME renewals reuse the key, so the
 pin survives certificate rotation.
 
+### Renewing the coordinator's certificate
+
+The pin is the SHA-256 of the terminator's public key, not of the certificate,
+so an ordinary ACME renewal — same private key, new certificate — changes
+nothing and no node has to be touched. A renewal that replaces the key as well
+does change it, and moving the pins is a deliberate sequence:
+
+1. **Learn the new pin, out of band.** `wgmesh pin https://wgmesh.example.com`
+   completes a handshake and prints the key that answered. Check that value
+   against the certificate on the terminator rather than trusting the
+   connection: this is the one handshake wgmesh makes with nothing pinned, and
+   it exists for exactly this moment.
+2. **Publish it in the configuration.** `settings.coordinator.spki_sha256` in
+   the coordinator's own module — or `[coordinator] spki_sha256` in a
+   hand-written deployment — becomes the new value, and every node's
+   configuration follows from there.
+3. **Move each node's pin.** A node keeps the pin it learned at enrolment in
+   its state file, and a configuration that disagrees with it is a refusal
+   rather than a quiet re-pin: `run` stops with `pins the coordination-plane
+   key` and names `trust rotate`. `wgmesh trust show` reports the `pinned` and
+   the `configured` value and whether they `match`; `wgmesh trust rotate --yes`
+   writes the configuration's value over the old one, and `run` starts again.
+4. **Re-pin the relays.** `wgmesh-relayd` keeps no pin in its state: it takes
+   `--pin`, or `[coordinator] spki_sha256` / `coordinator_spki_sha256` from
+   relay.toml, on every start, and refuses to connect without one rather than
+   trusting whatever answers. Updating the file and restarting the unit is the
+   whole of it.
+
+A node that has not had step 3 run yet is not broken and does not need to
+re-enrol: it still holds the only credential it will ever have, and the pin is
+the one thing it will not accept a new value for on its own. That is the point
+of the pin — a device that took whatever answered a connection it could not
+verify would hand the mesh to whoever answered first.
+
 ## `services.wgmesh.agent`
 
 | Option | Type | Default | Meaning |
