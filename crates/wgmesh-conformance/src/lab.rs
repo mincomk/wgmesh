@@ -343,8 +343,11 @@ pub fn campaign(a_mode: NatMode, b_mode: NatMode) -> CampaignOutcome {
         duo.a.agent.snapshot(),
         duo.b.agent.snapshot()
     );
-    let start_a = duo.a.agent.path();
-    let start_b = duo.b.agent.path();
+    // The start path comes from the agents' own record, not from a snapshot at
+    // this moment: a descheduled harness thread can miss the relayed second
+    // before the punch, and then report the wrong start.
+    let start_a = duo.a.agent.initial_path().unwrap_or(Path::Unknown);
+    let start_b = duo.b.agent.initial_path().unwrap_or(Path::Unknown);
     let assigned = relay_of(&coordinator.state(), DEVICE_A);
     println!(
         "  relayed: A={start_a:?} B={start_b:?} on {assigned:?}, relay forwarded {}",

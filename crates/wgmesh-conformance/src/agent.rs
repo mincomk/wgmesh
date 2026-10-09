@@ -77,6 +77,10 @@ pub struct Snapshot {
     pub first_probe_ms: Option<u64>,
     /// When a probe gave up and the agent fell back to the relay.
     pub fallback_ms: Option<u64>,
+    /// The path this agent reported the moment it first had one -- recorded by
+    /// the agent, so "both ends start relayed" is a fact about the state
+    /// machine rather than about when the harness happened to look.
+    pub initial_path: Option<Path>,
     pub now_ms: u64,
     /// The port this agent currently sends to: the peer's public address on a
     /// direct path, this agent's own relay slot on a relayed one.
@@ -132,6 +136,30 @@ impl Peer {
     }
 }
 
+impl Inner {
+    /// Record the punch's own timeline -- when this generation's first probe
+    /// began and when a probe gave up -- from the state machine's state.
+    ///
+    /// It is called wherever the machine is stepped, not only from the tick: a
+    /// probe can end because a relayed handshake arrived mid-window, and a
+    /// marker that watched ticks alone would miss exactly that case.
+    fn note_punch(&mut self, at_ms: u64) {
+        let probing = matches!(self.traversal.phase, Phase::Probing { .. });
+        if self.first_probe_ms.is_none() && probing {
+            self.first_probe_ms = Some(at_ms);
+        }
+        if self.fallback_ms.is_none()
+            && self.last_probing
+            && !probing
+            && self.traversal.attempts > self.last_attempts
+        {
+            self.fallback_ms = Some(at_ms);
+        }
+        self.last_probing = probing;
+        self.last_attempts = self.traversal.attempts;
+    }
+}
+
 struct Inner {
     traversal: Traversal,
     peer: Peer,
@@ -146,6 +174,12 @@ struct Inner {
     /// Reset with the generation, so a re-homed pair measures its own punch.
     first_probe_ms: Option<u64>,
     fallback_ms: Option<u64>,
+    initial_path: Option<Path>,
+    /// What the last look at the state machine saw, so the next look can tell
+    /// what changed. A probe can end on an arriving handshake as well as on a
+    /// tick, so the markers above are taken wherever the machine is stepped.
+    last_probing: bool,
+    last_attempts: u32,
     /// A freshly re-pointed peer gets this long to prove itself before a stale
     /// session counts as degraded. A deliberate probe window, followed by the
     /// fallback that re-points at the relay, is not a degradation -- and
@@ -199,6 +233,9 @@ impl Agent {
                 down_fired: false,
                 first_probe_ms: None,
                 fallback_ms: None,
+                initial_path: None,
+                last_probing: false,
+                last_attempts: 0,
                 grace_until: None,
                 last_send: None,
                 relays: Vec::new(),
@@ -235,6 +272,11 @@ impl Agent {
         self.inner.lock().unwrap().traversal.path
     }
 
+    /// The path this agent first reported, as the agent itself recorded it.
+    pub fn initial_path(&self) -> Option<Path> {
+        self.inner.lock().unwrap().initial_path
+    }
+
     pub fn attempts(&self) -> u32 {
         self.inner.lock().unwrap().traversal.attempts
     }
@@ -253,6 +295,7 @@ impl Agent {
             next_attempt_ms,
             first_probe_ms: inner.first_probe_ms,
             fallback_ms: inner.fallback_ms,
+            initial_path: inner.initial_path,
             now_ms: self.millis(),
             endpoint: inner.peer.endpoint,
             via_relay: inner.peer.via_relay,
@@ -359,6 +402,10 @@ impl Agent {
             &self.cfg,
         );
         self.apply(&mut inner, effects);
+        inner.note_punch(self.millis());
+        if inner.initial_path.is_none() {
+            inner.initial_path = Some(inner.traversal.path);
+        }
 
         if matches!(kind, MessageKind::Initiation) {
             self.send(&mut inner, MessageKind::Response, from, via_relay);
@@ -374,22 +421,9 @@ impl Agent {
         if inner.assigned_relay.is_none() {
             return;
         }
-        let was_probing = matches!(inner.traversal.phase, Phase::Probing { .. });
-        let attempts_before = inner.traversal.attempts;
         let effects = step(&mut inner.traversal, Event::Tick { at }, &self.cfg);
         self.apply(&mut inner, effects);
-
-        // The probe window, recorded as it happens. A probe in flight at the
-        // start of a tick counts too: the tick interval is the resolution.
-        if inner.first_probe_ms.is_none()
-            && (was_probing || matches!(inner.traversal.phase, Phase::Probing { .. }))
-        {
-            inner.first_probe_ms = Some(at_ms);
-        }
-        if inner.fallback_ms.is_none() && was_probing && inner.traversal.attempts > attempts_before
-        {
-            inner.fallback_ms = Some(at_ms);
-        }
+        inner.note_punch(at_ms);
 
         let idle = matches!(inner.traversal.phase, Phase::Idle { .. });
         let known_path = inner.traversal.path != Path::Unknown;
@@ -410,6 +444,7 @@ impl Agent {
             inner.down_fired = true;
             let effects = step(&mut inner.traversal, Event::Degraded { at }, &self.cfg);
             self.apply(&mut inner, effects);
+            inner.note_punch(at.as_millis());
         }
     }
 
@@ -484,6 +519,7 @@ impl Agent {
                 inner.down_fired = false;
                 inner.first_probe_ms = None;
                 inner.fallback_ms = None;
+                inner.initial_path = None;
                 // The relay may not have reported this slot back to us yet; the
                 // assigned relay's slot is a relayed address by construction.
                 inner.slot_ports.insert(slot.port());
@@ -496,6 +532,7 @@ impl Agent {
                     &self.cfg,
                 );
                 self.apply(&mut inner, effects);
+                inner.note_punch(self.millis());
             }
         }
 
@@ -516,6 +553,7 @@ impl Agent {
                     &self.cfg,
                 );
                 self.apply(&mut inner, effects);
+                inner.note_punch(self.millis());
             }
         }
     }

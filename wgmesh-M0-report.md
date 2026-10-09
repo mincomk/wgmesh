@@ -142,12 +142,12 @@ $ cargo test -p wgmesh-conformance --test promotion -- --test-threads=1 --nocapt
 
 ```text
         cone + cone       -> Direct / Direct   (start Relayed/Relayed, mappings A=1 B=1, attempts 0/0, probe -, backoff -/-, relay forwarded 14)
-        cone + restricted -> Direct / Direct   (start Relayed/Relayed, mappings A=1 B=1, attempts 0/0, probe -, backoff -/-, relay forwarded 12)
-  restricted + cone       -> Direct / Direct   (start Relayed/Relayed, mappings A=1 B=1, attempts 0/0, probe -, backoff -/-, relay forwarded 14)
+        cone + restricted -> Direct / Direct   (start Relayed/Relayed, mappings A=1 B=1, attempts 0/0, probe -, backoff -/-, relay forwarded 15)
+  restricted + cone       -> Direct / Direct   (start Relayed/Relayed, mappings A=1 B=1, attempts 0/0, probe -, backoff -/-, relay forwarded 16)
   restricted + restricted -> Direct / Direct   (start Relayed/Relayed, mappings A=1 B=1, attempts 0/0, probe -, backoff -/-, relay forwarded 14)
-   symmetric + symmetric  -> Relayed / Relayed  (start Relayed/Relayed, mappings A=2 B=2, attempts 1/1, probe 5.0s, backoff 28s/28s, relay forwarded 24)
+   symmetric + symmetric  -> Relayed / Relayed  (start Relayed/Relayed, mappings A=2 B=2, attempts 1/1, probe 5.0s, backoff 27s/27s, relay forwarded 35)
 
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 56.73s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.12s
 ```
 
 Each row asserts more than the final path:
@@ -157,7 +157,7 @@ Each row asserts more than the final path:
    ends report `Path::Direct`.
 3. **`symmetric + symmetric` never promotes.** The punch runs for `punch_window`
    = 5.0s, the state machine reverts to `Path::Relayed` with `attempts = 1`, and
-   the pending backoff is the first table entry (30s, read at 28s remaining) —
+   the pending backoff is the first table entry (30s, read at 27s remaining) —
    and the relay's forwarded counter **grows after the fallback was observed**,
    so the relayed path really resumed rather than merely having carried traffic
    before the punch.
@@ -197,9 +197,9 @@ $ cargo test -p wgmesh-conformance --test fleet -- --nocapture
 ```text
 killing relay-1 (the home of pair 101/102)
 after the kill: pair 101/102 on Some("relay-2"), pair 103/104 on Some("relay-2"), relay-1 healthy=Some(false)
-longest unreachable run: pair 101/102 4 samples, pair 103/104 0 samples
+longest unreachable run: pair 101/102 21 samples, pair 103/104 0 samples
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.28s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.03s
 ```
 
 Two pairs, both symmetric so both stay on their relay and the relay's liveness is
@@ -213,7 +213,8 @@ The test asserts five things:
   and the re-homing both happened, independent of sampling;
 - the cut pair **is reachable again** within the window, and its longest run of
   samples with no authenticated packet is longer than the untouched pair's
-  (4 samples against 0 in the run above). "Reachable" is a trailing 1.5s window,
+  (21 samples against 0 in the run above -- the re-homing window the lab's 3s
+  relay timeout sets). "Reachable" is a trailing 1.5s window,
   which hides the first part of any outage, so this corroborates the counter
   rather than replacing it;
 - the pair on the surviving relay is **never re-homed and never disturbed**;
@@ -231,7 +232,7 @@ $ cargo test -p wgmesh-conformance --test coordinator_udp -- --nocapture
 ```text
 UDP sockets: harness=6, relays=2, coordinator=0 (TCP on the coordinator: 1)
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.64s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
 ```
 
 The check is structural, not behavioural: `/proc/<pid>/fd` gives the socket inodes
@@ -359,10 +360,14 @@ claims otherwise.
   WireGuard's 25s and a relay that has been silent for 3s is treated as gone
   (ten missed heartbeats), so a scenario completes in seconds. The state machine's own
   timings (`punch_delay` 2s, `punch_window` 5s, backoff 30s/120s/600s) are the
-  design's, unmodified, and a promotion test asserts them.
-- `probe_secs` is measured between the first agent entering the probe and the
-  first observing the fallback, sampled every 25ms — it is a wall-clock
-  observation of the 5s window, not an exact timer.
+  design's, unmodified, and a promotion test asserts them. The *start* path a
+  row reports is the path each agent first had, recorded by the agent itself, so
+  "both ends start relayed" is a fact about the state machine rather than about
+  when the harness happened to look.
+- `probe_secs` is measured by the agents themselves, between the moment they
+  entered the probe and the moment a probe gave up, at the tick interval's
+  resolution (25ms) — an observation of the 5s window on the state machine's own
+  clock, not an exact timer.
 - The relay's forwarded counter in the first line of a campaign reads 0 because
   the coordinator's view of a relay's stats comes from its heartbeat, which is
   300ms apart; the counter at the end of the run is what the assertions use.
@@ -483,7 +488,7 @@ $ cargo xtask check-style                                  # ok
 ```
 
 `cargo test --workspace --locked` reports, target by target: 27 (`wgmesh-core`) +
-40 (`wgmesh-config`) + 29 (`wgmesh-secrets`) + 23 and 2 ignored (`wgmesh-state`)
+41 (`wgmesh-config`) + 29 (`wgmesh-secrets`) + 23 and 2 ignored (`wgmesh-state`)
 + 6 (`wgmesh-conformance` lib) + 10 (`wgmesh-app` startup) + 6 + 1 + 1
 (`wgmesh-conformance` promotion, fleet, coordinator_udp) passed, 0 failed; the
 remaining targets are the stubs, and doc-tests are empty.
