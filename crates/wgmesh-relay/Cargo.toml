@@ -18,3 +18,9 @@ path = "src/main.rs"
 wgmesh-core = { path = "../wgmesh-core" }
 socket2 = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+
+[dev-dependencies]
+# The one-port integration test builds handshakes with real `mac1` values, which means
+# hashing `LABEL_MAC1 || recipient.public` exactly as the core does. Development only:
+# nothing that ships hashes anything here.
+blake2 = "0.11"

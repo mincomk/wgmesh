@@ -23,6 +23,30 @@ Configuration, state and secrets are three separate files with three different
 owners: configuration is a person's, state is the machine's, and secrets are
 nobody's to edit. Setup, state and key files are documented in the blueprint.
 
+## How a relay finds the destination
+
+A relay routes in one of two layouts, and which one it uses is a configuration
+switch (`relay.one_port`).
+
+- **A port per pair** (the default). Each device holds a slot socket and is paired with
+  one counterpart, so the port a datagram arrives on names both ends — the sender and
+  where it is going. The relay never reads a byte of the payload.
+- **One port per node** (`relay.one_port = true`). A node keeps a single socket and may
+  be paired with many peers, so the ingress port can only say who *sent* a packet. Where
+  it is *going* comes out of the packet: a handshake (type 1 or 2) names its recipient
+  through `mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[..offsetof(mac1)])`,
+  and everything else (types 2, 3, 4) through `receiver_index`. The relay learns which
+  device owns which index by watching the handshakes it carries — a table of an index and
+  a device id, never a key and never a plaintext — and that table refreshes itself,
+  because WireGuard rekeys roughly every two minutes and a rekey picks a fresh index. A
+  packet whose destination tag names nothing in the keyset or in that table is dropped and
+  counted `rejected`.
+
+Neither layout is a substitute for WireGuard's own cryptography. An attacker who guesses a
+slot port can send packets, but cannot read one, cannot forge one that passes `mac1`, and
+cannot open a session — none of that is the relay's to give. The exposure left by a guess
+is bandwidth and CPU.
+
 ## Building and testing
 
 Rust 1.85 or newer (the workspace is edition 2024); the pinned channel in
@@ -68,7 +92,7 @@ under `crates/` and `xtask/`, comments included. Source comments are English.
 | `crates/wgmesh-wireguard` | The kernel WireGuard adapter (netlink) and the route adapter. |
 | `crates/wgmesh-client` | The HTTPS client for the coordinator API, with SPKI pinning. |
 | `crates/wgmesh-coordinator` | Coordinator application and the `wgmeshd` binary. |
-| `crates/wgmesh-relay` | Relay forwarding engine, UDP driver and the `wgmesh-relayd` binary. |
+| `crates/wgmesh-relay` | Relay forwarding engine, UDP driver and the `wgmesh-relayd` binary. Two routing layouts: a port per pair, or one port per node with `mac1`/`receiver_index` routing (`relay.one_port`). |
 | `crates/wgmesh-cli` | The `wgmesh` binary: the composition root that wires adapters to use cases. |
 | `xtask` | The repository checks above, as a crate. |
 | `docs` | The design documents. |

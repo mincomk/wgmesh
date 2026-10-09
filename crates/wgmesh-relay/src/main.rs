@@ -67,6 +67,10 @@ GET /v1/relay/assignment over the signed control path. One directive per line:
 relay.toml is read in both shapes the project writes: the flat keys of the
 blueprint's section 8, and the sectioned file the NixOS module renders
 ([coordinator] url, [relay] port_range, [state] dir). Unknown keys are ignored.
+
+[relay] one_port = true switches the data plane to one UDP socket per node,
+routing each datagram by its `mac1` (handshakes) or its `receiver_index`
+(everything else). The default, false, is the port-per-pair layout.
 ";
 
 fn main() -> ExitCode {
@@ -241,6 +245,18 @@ fn parse_config(text: &str) -> Result<ParsedConfig, String> {
             ("", "rate_limit_mbit_per_slot") | ("relay", "rate_limit_mbit_per_slot") => {
                 relay.mbit_per_slot = parse_number(value, number)?;
             }
+            // One port per node: the relay reads the destination out of the packet. Either
+            // spelling sets the same switch; `one_port = true` is the one the README uses.
+            ("", "one_port") | ("relay", "one_port") => {
+                relay.one_port = parse_bool(value, number)?;
+            }
+            ("relay", "mode") => {
+                relay.one_port = match value {
+                    "one_port" | "one-port" | "per_node" => true,
+                    "pair" | "per_pair" | "per-pair" => false,
+                    _ => return Err(format!("line {number}: `{value}` is not a relay mode")),
+                };
+            }
             ("state", "dir") | ("", "state_dir") => {
                 state_dir = Some(PathBuf::from(value));
             }
@@ -265,6 +281,14 @@ fn parse_range(value: &str, line: usize) -> Result<(u16, u16), String> {
         parse_number(low.trim(), line)?,
         parse_number(high.trim(), line)?,
     ))
+}
+
+fn parse_bool(value: &str, line: usize) -> Result<bool, String> {
+    match value {
+        "true" | "yes" | "on" | "1" => Ok(true),
+        "false" | "no" | "off" | "0" => Ok(false),
+        _ => Err(format!("line {line}: `{value}` is not a boolean")),
+    }
 }
 
 fn enroll(flags: &Flags, config: &RelayConfig, state_dir: &Path) -> Result<(), String> {
@@ -399,10 +423,15 @@ fn serve(flags: &Flags, config: &RelayConfig, state_dir: &Path) -> Result<(), St
                 .on_assignment(assignment, Millis::ZERO)
                 .map_err(|error| error.to_string())?;
             println!(
-                "wgmesh-relayd {} serving {} slots, {} pairs",
+                "wgmesh-relayd {} serving {} slots, {} pairs ({})",
                 engine.config().relay_id,
                 engine.slots().len(),
-                engine.pairs().len()
+                engine.pairs().len(),
+                if engine.one_port() {
+                    "one port per node, destination from mac1/receiver_index"
+                } else {
+                    "a port per pair, destination from the ingress port"
+                }
             );
         }
         None => println!(
@@ -462,7 +491,7 @@ fn render_report(report: &wgmesh_relay::Report) -> String {
     match report {
         wgmesh_relay::Report::Heartbeat(heartbeat) => format!(
             "heartbeat relay={} uptime_ms={} slots={} pairs={} draining={} keyset_devices={} \
-             forwarded={} dropped={}",
+             forwarded={} dropped={} rejected={}",
             heartbeat.relay_id,
             heartbeat.uptime_ms,
             heartbeat.slots,
@@ -470,7 +499,8 @@ fn render_report(report: &wgmesh_relay::Report) -> String {
             heartbeat.draining,
             heartbeat.keyset_devices,
             heartbeat.counters.forwarded,
-            heartbeat.counters.drops.total()
+            heartbeat.counters.drops.total(),
+            heartbeat.counters.rejected
         ),
         wgmesh_relay::Report::Observations(rows) => {
             let listed: Vec<String> = rows
@@ -518,6 +548,7 @@ fn render_status(engine: &RelayEngine<UdpSlotSockets>, at: Millis) -> String {
         format!("forwarded={}", status.counters.forwarded),
         format!("forwarded_bytes={}", status.counters.forwarded_bytes),
         format!("socket_errors={}", status.counters.socket_errors),
+        format!("rejected={}", status.counters.rejected),
     ];
     for drop in [
         wgmesh_relay::Drop::UnknownIngress,

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use wgmesh_core::{DeviceId, DropReason, Endpoint, Millis, RelayTable, Route};
+use wgmesh_core::{DeviceId, DropReason, Endpoint, Millis, PublicKey, RelayTable, Route};
 
 use crate::assignment::{Assignment, Keyset, PairAssignment, SlotAssignment};
 use crate::config::RelayConfig;
@@ -107,6 +107,11 @@ pub struct Counters {
     pub forwarded_bytes: u64,
     pub socket_errors: u64,
     pub drops: DropCounters,
+    // Packets whose destination tag named nothing the relay knows: a handshake whose `mac1`
+    // matches no key in the keyset, or an index with no live session behind it. Only the
+    // one-port layout can produce one -- the port-per-pair layout names the destination in
+    // the port the packet arrived on -- so it stays zero until `one_port` is switched on.
+    pub rejected: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -278,6 +283,14 @@ impl<S: SlotSockets> RelayEngine<S> {
         self.draining
     }
 
+    /// The session index table one-port mode routes transport packets by: an index and the
+    /// device that chose it, learned from the handshakes this relay carried. It holds no key
+    /// and no plaintext -- an entry is an index, a device id and a timestamp, which is all
+    /// `wgmesh_core::SessionTable::ENTRY_BYTES` has room for.
+    pub fn sessions(&self) -> &wgmesh_core::SessionTable {
+        self.table.sessions()
+    }
+
     pub fn set_draining(&mut self, draining: bool) {
         self.draining = draining;
     }
@@ -289,6 +302,7 @@ impl<S: SlotSockets> RelayEngine<S> {
     pub fn on_assignment(&mut self, assignment: Assignment, at: Millis) -> Result<(), RelayError> {
         self.keyset = Some(assignment.keyset.clone());
         self.keyset_loaded_at = at;
+        self.apply_keyset();
 
         let mut slots = assignment.slots.clone();
         slots.sort();
@@ -308,6 +322,35 @@ impl<S: SlotSockets> RelayEngine<S> {
     pub fn on_keyset(&mut self, keyset: Keyset, at: Millis) {
         self.keyset = Some(keyset);
         self.keyset_loaded_at = at;
+        self.apply_keyset();
+    }
+
+    /// Whether this relay serves one port per node (`mac1`/`receiver_index` routing) rather
+    /// than a port per pair.
+    pub fn one_port(&self) -> bool {
+        self.config.one_port
+    }
+
+    // One-port mode reads the destination out of the packet, so the routing table needs the
+    // network's public keys: a `mac1` is verified against `HASH(LABEL_MAC1 || recipient.public)`
+    // and nothing but a public key is needed to do it. The port-per-pair layout never looks
+    // past a packet's first byte, so it leaves the core's keyset empty.
+    fn apply_keyset(&mut self) {
+        if !self.config.one_port {
+            return;
+        }
+        let mut keyset = wgmesh_core::Keyset::new();
+        if let Some(current) = &self.keyset {
+            for network in &current.networks {
+                for peer in &network.peers {
+                    let Ok(bytes) = <[u8; 32]>::try_from(peer.wg_pubkey.as_slice()) else {
+                        continue;
+                    };
+                    keyset.insert(DeviceId(peer.device_id), PublicKey::from_bytes(bytes));
+                }
+            }
+        }
+        *self.table.keyset_mut() = keyset;
     }
 
     fn rebuild(&mut self) -> Result<(), RelayError> {
@@ -378,6 +421,7 @@ impl<S: SlotSockets> RelayEngine<S> {
                 )
             })
             .collect();
+        self.apply_keyset();
         Ok(())
     }
 
@@ -407,12 +451,25 @@ impl<S: SlotSockets> RelayEngine<S> {
             }
         }
 
-        let destination = ingress
-            .and_then(|device| self.pair_of.get(&device).copied())
-            .unwrap_or(UNPAIRED);
-        let route = self
-            .table
-            .route(port, Endpoint::new(from), destination, payload, at);
+        let route = if self.config.one_port {
+            // The expanded layout: the ingress port names the sender and nothing else, and
+            // the destination comes out of the packet. `route_one_port` owns that judgement;
+            // what it counts on its own -- a destination tag that names nothing -- is folded
+            // into this engine's counters here, because a rebuild hands the core a fresh
+            // table and only a delta survives that.
+            let rejected = self.table.counters().rejected;
+            let route = self
+                .table
+                .route_one_port(port, Endpoint::new(from), payload, at);
+            self.counters.rejected += self.table.counters().rejected - rejected;
+            route
+        } else {
+            let destination = ingress
+                .and_then(|device| self.pair_of.get(&device).copied())
+                .unwrap_or(UNPAIRED);
+            self.table
+                .route(port, Endpoint::new(from), destination, payload, at)
+        };
 
         if let Some(device) = ingress {
             // `RelayTable` pins the source address exactly when it does not drop for

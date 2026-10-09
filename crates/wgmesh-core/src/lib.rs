@@ -10,7 +10,9 @@ use blake2::digest::{Digest, KeyInit, Mac, Update};
 use blake2::{Blake2s256, Blake2sMac};
 
 pub mod route;
+pub mod router;
 pub use route::*;
+pub use router::*;
 
 const LABEL_MAC1: &[u8] = b"mac1----";
 
@@ -435,8 +437,11 @@ pub const SOURCE_PIN_WINDOW: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug, Default)]
 pub struct RelayTable {
-    slots: BTreeMap<DeviceId, SlotEntry>,
-    assigned: BTreeSet<(DeviceId, DeviceId)>,
+    pub(crate) slots: BTreeMap<DeviceId, SlotEntry>,
+    pub(crate) assigned: BTreeSet<(DeviceId, DeviceId)>,
+    pub(crate) keyset: Keyset,
+    pub(crate) sessions: SessionTable,
+    pub(crate) counters: RelayCounters,
 }
 
 impl RelayTable {

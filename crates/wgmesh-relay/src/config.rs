@@ -14,6 +14,10 @@ pub struct RelayConfig {
     pub mbit_per_slot: u32,
     pub report_interval: Duration,
     pub poll_budget: Duration,
+    // The expanded layout: one UDP socket per node rather than a port per pair. The relay
+    // then reads the destination out of the packet -- `mac1` for a handshake,
+    // `receiver_index` for everything else -- and the ingress port only says who sent it.
+    pub one_port: bool,
 }
 
 impl Default for RelayConfig {
@@ -28,6 +32,7 @@ impl Default for RelayConfig {
             mbit_per_slot: 100,
             report_interval: Duration::from_secs(2),
             poll_budget: Duration::from_millis(20),
+            one_port: false,
         }
     }
 }
