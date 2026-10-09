@@ -10,9 +10,10 @@ const DEFAULT_CONFIG: &str = "/etc/wgmesh/agent.toml";
     version,
     about = "WireGuard mesh agent",
     long_about = "A WireGuard mesh with a coordination plane and a relay data plane.\n\n\
-                  Configuration comes from a file, the environment (WGMESH__SECTION__KEY) and the\n\
-                  command line, in that order of increasing precedence. Run `wgmesh config show`\n\
-                  to see the effective values."
+                  Configuration is resolved from the file `--config` names and from the\n\
+                  environment (WGMESH__SECTION__KEY), which wins over the file; `--state-dir`\n\
+                  then overrides the state directory. Run `wgmesh config show` to see the\n\
+                  effective values."
 )]
 pub struct Cli {
     /// The configuration file to read.

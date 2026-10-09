@@ -296,23 +296,24 @@ pub fn route_table(settings: &Settings) -> RouteTable {
     settings.route.table.to_core()
 }
 
-/// Read the join token from the place the configuration names.
+/// Read the join token from the place the resolved configuration names.
+///
+/// The settings are the ones the command has already resolved, so the token's path comes out of the
+/// same layers as every other value. That is what lets `WGMESH__ENROLLMENT__TOKEN_FILE` reach the
+/// reader: the NixOS module hands the token over as that environment variable, pointing at the
+/// systemd credential (`%d/enrollment-token`, which systemd resolves to
+/// `/run/credentials/wgmesh-agent.service/enrollment-token`), and the token's path is deliberately
+/// not written into the configuration file. Resolving the file a second time here — from the file
+/// layer alone — would leave such a deployment with no token at all, and the agent would refuse to
+/// enrol with a message about a token nobody forgot to configure.
 pub fn read_token(
-    config_path: &Path,
+    settings: &Settings,
     explicit: Option<String>,
 ) -> Result<Option<JoinToken>, CliError> {
     if let Some(token) = explicit {
         let token = token.trim().to_string();
         return Ok((!token.is_empty()).then(|| JoinToken::new(token)));
     }
-    if let Ok(token) = std::env::var("WGMESH_ENROLLMENT_TOKEN") {
-        let token = token.trim().to_string();
-        if !token.is_empty() {
-            return Ok(Some(JoinToken::new(token)));
-        }
-    }
-    let settings = wgmesh_config::load(config_path)
-        .map_err(|error| CliError::runtime(format!("{}: {error}", config_path.display())))?;
     let Some(path) = non_empty(&settings.enrollment.token_file) else {
         return Ok(None);
     };

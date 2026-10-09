@@ -404,6 +404,86 @@ fn help_lists_every_command_the_contract_names() {
     }
 }
 
+/// The token the NixOS module hands over: not a line in the configuration file, but the systemd
+/// credential named by `WGMESH__ENROLLMENT__TOKEN_FILE` — the variable `nix/modules/agent.nix` sets
+/// to `%d/enrollment-token`, which systemd resolves to
+/// `/run/credentials/wgmesh-agent.service/enrollment-token`. A reader that resolved the
+/// configuration file a second time, without the environment layer, would find no token here, and
+/// the agent would refuse to enrol on a host configured exactly as the module configures it.
+#[test]
+fn the_credential_the_module_hands_over_enrols_the_agent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_world(dir.path());
+    let credential = dir.path().join("enrollment-token");
+    fs::write(&credential, "tok\n").expect("credential written");
+    // No `[enrollment]` table anywhere: the credential is the only place the token exists.
+    let config = minimal_config(dir.path());
+    let state = state_dir(dir.path());
+
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .env("WGMESH__ENROLLMENT__TOKEN_FILE", &credential)
+        .args(["--backend", "simulated", "join"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("enrolled as device 7"));
+
+    // And with the state gone — what `state reset` leaves behind — the next run enrols again from
+    // the same credential, which is what makes a reset survivable on a host whose token only ever
+    // existed as a credential.
+    fs::remove_file(state.join("state.json")).expect("state removed");
+    let mut child = bin()
+        .arg("--config")
+        .arg(&config)
+        .env("WGMESH__ENROLLMENT__TOKEN_FILE", &credential)
+        .args(["--backend", "simulated", "run"])
+        .spawn()
+        .expect("the agent starts");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut enrolled = false;
+    while Instant::now() < deadline {
+        if let Ok(text) = fs::read_to_string(state.join("state.json")) {
+            if text.contains("\"id\": \"8\"") {
+                enrolled = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(enrolled, "a run with only the credential did not enrol");
+}
+
+/// The other route to the same token, so the fix above did not trade one for the other: a file the
+/// configuration itself names.
+#[test]
+fn a_token_file_named_by_the_configuration_enrols_the_agent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_world(dir.path());
+    let token_file = dir.path().join("token");
+    fs::write(&token_file, "tok\n").expect("token written");
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[coordinator]\nurl = \"https://wgmesh.example.com\"\nspki_sha256 = \"{GOOD_SPKI}\"\n\n\
+             [enrollment]\ntoken_file = \"{}\"\n\n\
+             [state]\ndir = \"{}\"\n",
+            token_file.display(),
+            state_dir(dir.path()).display()
+        ),
+    );
+
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "join"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("enrolled as device 7"));
+}
+
 /// The acceptance pipeline: enrol, run, and read one JSON document back out of it.
 #[test]
 fn the_pipeline_enrols_runs_and_reports_each_peer() {
