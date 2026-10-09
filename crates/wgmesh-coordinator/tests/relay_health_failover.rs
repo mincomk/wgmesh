@@ -19,6 +19,7 @@ use wgmesh_app::coordinator::ports::{
     DeviceState, Directory, NewDevice, NewNetwork, NewRelay, Placement, RelayState,
 };
 use wgmesh_coordinator::clock::FixedClock;
+use wgmesh_coordinator::http::watch_relays;
 use wgmesh_coordinator::service::Services;
 use wgmesh_coordinator::store::Sqlite;
 use wgmesh_core::{DeviceId, Millis, PublicKey, RelayId};
@@ -682,4 +683,123 @@ async fn relays(fleet: &Fleet) -> Vec<RelayId> {
         .into_iter()
         .map(|relay| relay.id)
         .collect()
+}
+
+/// Wait until the pair sits on `expected`. Nothing here asks the coordinator to do
+/// anything: the only thing that can move the pair is the watch that was started.
+async fn wait_for_pair(
+    fleet: &Fleet,
+    left: DeviceId,
+    right: DeviceId,
+    expected: Option<RelayId>,
+) -> Option<RelayId> {
+    let deadline = Instant::now() + LONG;
+    loop {
+        let now = fleet.pair_relay(left, right).await;
+        if now == expected {
+            return now;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pair never moved to {expected:?}: it is on {now:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// The daemon's own timer, and nothing else: a relay that goes quiet has its pairs
+/// moved without a caller ever asking for a sweep.
+#[tokio::test]
+async fn the_watch_the_daemon_runs_moves_a_quiet_relays_pairs() {
+    let fleet = Fleet::new().await;
+    let relay_one = fleet.relay("relay-1", "198.51.100.4").await;
+    let relay_two = fleet.relay("relay-2", "198.51.100.5").await;
+    let relay_three = fleet.relay("relay-3", "198.51.100.6").await;
+
+    let a = fleet.device("a", 1).await;
+    let b = fleet.device("b", 2).await;
+    let c = fleet.device("c", 3).await;
+    let d = fleet.device("d", 4).await;
+
+    let at = fleet.now();
+    for (index, relay) in [relay_one, relay_two, relay_three].into_iter().enumerate() {
+        fleet
+            .slots(relay, &[a, b, c, d], 54_000 + 100 * index as u16)
+            .await;
+        fleet.heartbeat(relay, false, at).await;
+    }
+    assert_eq!(fleet.assign(a, b).await, Some(relay_one));
+    assert_eq!(fleet.assign(c, d).await, Some(relay_two));
+
+    // relay-1 misses its third heartbeat while the other two report on the same
+    // beat, so from the control plane this is exactly a relay that has gone quiet.
+    let late = at.plus(HEARTBEAT * 4);
+    fleet.advance_to(late);
+    fleet.heartbeat(relay_two, false, late).await;
+    fleet.heartbeat(relay_three, false, late).await;
+
+    let watch = watch_relays(fleet.services.clone(), Duration::from_millis(20));
+
+    assert_eq!(
+        wait_for_pair(&fleet, a, b, Some(relay_three)).await,
+        Some(relay_three),
+        "the daemon's sweep did not move the pair off the relay that went quiet"
+    );
+    assert_eq!(
+        fleet.pair_relay(c, d).await,
+        Some(relay_two),
+        "the pair on the relay that was never late keeps its assignment"
+    );
+
+    watch.abort();
+}
+
+/// The other half of the same timer: the operator asks a relay to leave, the relay
+/// says so on its next heartbeat, and the daemon hands its pairs over -- with no
+/// second command and no caller in the loop.
+#[tokio::test]
+async fn the_watch_the_daemon_runs_hands_a_draining_relays_pairs_over() {
+    let fleet = Fleet::new().await;
+    let relay_one = fleet.relay("relay-1", "198.51.100.4").await;
+    let relay_two = fleet.relay("relay-2", "198.51.100.5").await;
+    let relay_three = fleet.relay("relay-3", "198.51.100.6").await;
+
+    let a = fleet.device("a", 1).await;
+    let b = fleet.device("b", 2).await;
+    let c = fleet.device("c", 3).await;
+    let d = fleet.device("d", 4).await;
+
+    let at = fleet.now();
+    for (index, relay) in [relay_one, relay_two, relay_three].into_iter().enumerate() {
+        fleet
+            .slots(relay, &[a, b, c, d], 54_000 + 100 * index as u16)
+            .await;
+        fleet.heartbeat(relay, false, at).await;
+    }
+    assert_eq!(fleet.assign(a, b).await, Some(relay_one));
+    assert_eq!(fleet.assign(c, d).await, Some(relay_two));
+
+    // One heartbeat later every relay is inside its window, and relay-1's own word
+    // is the only thing that says it is leaving.
+    let said = at.plus(HEARTBEAT);
+    fleet.advance_to(said);
+    fleet.heartbeat(relay_one, true, said).await;
+    fleet.heartbeat(relay_two, false, said).await;
+    fleet.heartbeat(relay_three, false, said).await;
+    assert!(fleet.is_draining(relay_one).await);
+
+    let watch = watch_relays(fleet.services.clone(), Duration::from_millis(20));
+
+    assert_eq!(
+        wait_for_pair(&fleet, a, b, Some(relay_three)).await,
+        Some(relay_three),
+        "the daemon's sweep did not hand the draining relay's pair over"
+    );
+    assert_eq!(
+        fleet.pair_relay(c, d).await,
+        Some(relay_two),
+        "another relay's pair is untouched by the drain"
+    );
+
+    watch.abort();
 }
