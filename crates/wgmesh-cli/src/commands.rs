@@ -184,7 +184,7 @@ fn problem_view(problem: &Problem) -> ProblemView {
 }
 
 fn show_key(cli: &Cli, kind: KeyKind, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let (private, public) = match kind {
         KeyKind::Wg => container
             .secrets()
@@ -218,7 +218,7 @@ fn rotate_key(cli: &Cli, yes: bool) -> Result<(), CliError> {
              about; pass --yes to confirm",
         ));
     }
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let public = container
         .secrets()
         .rotate_tunnel()
@@ -229,7 +229,7 @@ fn rotate_key(cli: &Cli, yes: bool) -> Result<(), CliError> {
 }
 
 fn show_state(cli: &Cli, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let path = container.state().path().to_path_buf();
     let Some(document) = container
         .state()
@@ -266,7 +266,7 @@ fn reset_state(cli: &Cli, yes: bool) -> Result<(), CliError> {
              the next run enrols again; pass --yes to confirm",
         ));
     }
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let path = container.state().path().to_path_buf();
     container
         .state()
@@ -280,7 +280,7 @@ fn reset_state(cli: &Cli, yes: bool) -> Result<(), CliError> {
 }
 
 fn show_trust(cli: &Cli, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let configured = container
         .settings()
         .coordinator
@@ -314,7 +314,7 @@ fn rotate_trust(cli: &Cli, yes: bool) -> Result<(), CliError> {
              to confirm",
         ));
     }
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let spki = container.configured_spki()?;
     let mut document = container
         .state()
@@ -334,7 +334,11 @@ fn rotate_trust(cli: &Cli, yes: bool) -> Result<(), CliError> {
 }
 
 async fn join(cli: &Cli, token: Option<String>, json: bool) -> Result<(), CliError> {
-    let token = match crate::container::read_token(&cli.config, token)? {
+    // The settings are resolved once, here, so the token's path is the one every other command
+    // reads: the file, the environment (which is where the NixOS module puts the systemd
+    // credential) and the flags, in that order.
+    let (settings, _problems) = load(cli)?;
+    let token = match crate::container::read_token(&settings, token)? {
         Some(token) => token,
         None => {
             return Err(CliError::usage(
@@ -343,7 +347,7 @@ async fn join(cli: &Cli, token: Option<String>, json: bool) -> Result<(), CliErr
             ));
         }
     };
-    let container = container(cli, Some(token))?;
+    let container = container_with(cli, settings, Some(token))?;
     let settings = container.agent_settings()?;
     let agent = container.agent(settings)?;
     let state = agent
@@ -394,7 +398,10 @@ async fn run(cli: &Cli, check_only: bool) -> Result<(), CliError> {
         println!("configuration ok; nothing was started");
         return Ok(());
     }
-    let token = crate::container::read_token(&cli.config, None)?;
+    // The token is read from the settings this command already resolved, so an agent configured
+    // with nothing but `WGMESH__ENROLLMENT__TOKEN_FILE` — the credential the NixOS module hands
+    // it — can enrol on a run that has no state to resume from.
+    let token = crate::container::read_token(&settings, None)?;
     let container = container_with(cli, settings, token)?;
     let started = agent::run(&container).await?;
     println!(
@@ -415,7 +422,7 @@ fn status(cli: &Cli, json: bool) -> Result<(), CliError> {
 }
 
 fn peers(cli: &Cli, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let view = peers_view(&container)?;
     if json {
         println!("{}", output::json(&view));
@@ -426,7 +433,7 @@ fn peers(cli: &Cli, json: bool) -> Result<(), CliError> {
 }
 
 fn routes(cli: &Cli, args: &crate::cli::RoutesArgs) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     match &args.action {
         None => {
             let installed = installed_routes(&container)?;
@@ -504,7 +511,7 @@ fn routes(cli: &Cli, args: &crate::cli::RoutesArgs) -> Result<(), CliError> {
 }
 
 fn relays(cli: &Cli, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let document = container
         .state()
         .document()
@@ -661,7 +668,7 @@ fn doctor(cli: &Cli, json: bool) -> Result<(), CliError> {
 
 /// The status a person or a script reads.
 pub fn status_view(cli: &Cli) -> Result<StatusView, CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let document = container
         .state()
         .document()
@@ -818,10 +825,10 @@ fn installed_routes(container: &Container) -> Result<Vec<wgmesh_core::RouteSpec>
         .map_err(|error| CliError::runtime(error.to_string()))
 }
 
-/// Build a container from the command line alone.
-fn container(cli: &Cli, token: Option<JoinToken>) -> Result<Container, CliError> {
+/// Build a container from the command line alone, with no join token.
+fn container(cli: &Cli) -> Result<Container, CliError> {
     let (settings, _problems) = load(cli)?;
-    container_with(cli, settings, token)
+    container_with(cli, settings, None)
 }
 
 fn container_with(
