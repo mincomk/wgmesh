@@ -52,12 +52,14 @@ let
             51820
             51999
           ];
+          # No `network` and no `log.level`: the relay's `[coordinator]` table has
+          # no network (a relay serves the networks it is assigned, it is not in
+          # one) and its schema has no `[log]` table at all. Both would be unknown
+          # keys in relay.toml, and the settings types reject unknown keys.
           coordinator = {
             url = "https://router/";
             spki_sha256 = spki;
-            network = "default";
           };
-          log.level = "debug";
         };
       };
 

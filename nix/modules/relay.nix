@@ -117,18 +117,14 @@ in
       '';
     };
 
-    logLevel = lib.mkOption {
-      type = lib.types.enum [
-        "error"
-        "warn"
-        "info"
-        "debug"
-        "trace"
-      ];
-      default = cfg.settings.log.level or "info";
-      defaultText = lib.literalExpression ''"info"'';
-      description = "Log level, passed to the relay as WGMESH__LOG__LEVEL.";
-    };
+    # There is deliberately no `logLevel` option here, unlike the agent and the
+    # coordinator. The relay's TOML schema has no `[log]` table (blueprint
+    # section 5, and `RelaySettings` in `wgmesh-config`), so the route the other
+    # two take -- read `settings.log.level` and pass it as WGMESH__LOG__LEVEL --
+    # would render a key the relay's own configuration reader rejects: the
+    # settings types are `deny_unknown_fields`, so an unknown `[log]` table is a
+    # startup failure, not an ignored key. A relay log level belongs in the
+    # relay's schema first; until then the module does not pretend to set one.
   };
 
   config = lib.mkIf cfg.enable {
@@ -169,9 +165,9 @@ in
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
 
-      environment = credentialEnvironment // {
-        WGMESH__LOG__LEVEL = cfg.logLevel;
-      };
+      # No WGMESH__LOG__LEVEL: the relay's configuration schema has no `log`
+      # table to put it in (see the note on the missing `logLevel` option above).
+      environment = credentialEnvironment;
 
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/wgmesh-relayd run --config /etc/wgmesh/relay.toml";

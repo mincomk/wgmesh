@@ -112,10 +112,11 @@ in
             51820
             51999
           ];
+          # The relay's `[coordinator]` table has no `network`: it takes part in
+          # no network of its own, it serves the ones the coordinator hands it.
           coordinator = {
             url = "https://router/";
             spki_sha256 = spki;
-            network = "default";
           };
         };
       };

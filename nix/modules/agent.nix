@@ -62,6 +62,15 @@ let
     };
 
   listenPort = cfg.settings.interface.listen_port or 0;
+
+  # The tunnel interface's name, as the nftables rule needs it.
+  tunnel = cfg.settings.interface.name or "wg0";
+
+  # nftables set elements are comma separated -- `{ eth0 eth1 }` is a syntax
+  # error ("unexpected string, expecting comma or '}'"), and NixOS runs
+  # `nft --check` over the whole ruleset at build time, so one malformed element
+  # fails the system rather than one rule.
+  trustedSet = lib.concatMapStringsSep ", " (name: "\"${name}\"") cfg.forwarding.trustedInterfaces;
 in
 {
   options.services.wgmesh.agent = {
@@ -355,10 +364,8 @@ in
       content = ''
         chain forward {
           type filter hook forward priority filter; policy accept;
-          iifname { ${toString cfg.forwarding.trustedInterfaces} } oifname "${
-            cfg.settings.interface.name or "wg0"
-          }" accept
-          iifname "${cfg.settings.interface.name or "wg0"}" oifname { ${toString cfg.forwarding.trustedInterfaces} } accept
+          iifname { ${trustedSet} } oifname "${tunnel}" accept
+          iifname "${tunnel}" oifname { ${trustedSet} } accept
         }
       '';
     };
