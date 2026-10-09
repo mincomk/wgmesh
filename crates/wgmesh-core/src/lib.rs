@@ -9,7 +9,10 @@ use blake2::digest::consts::U16;
 use blake2::digest::{Digest, KeyInit, Mac, Update};
 use blake2::{Blake2s256, Blake2sMac};
 
+pub mod candidates;
 pub mod route;
+
+pub use candidates::*;
 pub use route::*;
 
 const LABEL_MAC1: &[u8] = b"mac1----";
@@ -309,13 +312,21 @@ pub fn step(state: &mut Traversal, event: Event, cfg: &TraversalConfig) -> Vec<E
             vec![]
         }
         Event::Handshake { via, at } => {
-            state.path = match state.relay {
-                Some(relay) if via == relay => Path::Relayed,
-                _ => Path::Direct,
+            let direct = match state.relay {
+                Some(relay) => via != relay,
+                None => true,
             };
-            state.attempts = 0;
+            state.path = if direct { Path::Direct } else { Path::Relayed };
             state.active = Some(via);
-            state.phase = Phase::Idle { next_attempt: at };
+            if direct {
+                // Only a handshake that arrived over the direct endpoint is
+                // evidence that direct traversal works. A handshake over the
+                // relay is the keepalive doing its job, and clearing the
+                // retreat counter on it would mean that on a symmetric NAT the
+                // backoff never grew past its first step.
+                state.attempts = 0;
+                state.phase = Phase::Idle { next_attempt: at };
+            }
             vec![]
         }
         Event::Degraded { at } => {
@@ -821,6 +832,51 @@ mod tests {
             Phase::Idle {
                 next_attempt: Millis::from_secs(330)
             }
+        );
+    }
+
+    #[test]
+    fn a_relay_handshake_does_not_clear_the_retreat_counter() {
+        let (mut state, cfg, relay, peer) = assigned(Millis::ZERO);
+        observe(&mut state, &cfg, peer, Millis::from_secs(1));
+        step(
+            &mut state,
+            Event::Tick {
+                at: Millis::from_secs(2),
+            },
+            &cfg,
+        );
+        step(
+            &mut state,
+            Event::Tick {
+                at: Millis::from_secs(8),
+            },
+            &cfg,
+        );
+        assert_eq!(state.attempts, 1);
+
+        // The relay path is alive again and its keepalive is producing
+        // handshakes. They must not read as a successful direct attempt.
+        let effects = step(
+            &mut state,
+            Event::Handshake {
+                via: relay,
+                at: Millis::from_secs(20),
+            },
+            &cfg,
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.path, Path::Relayed);
+        assert_eq!(
+            state.attempts, 1,
+            "a relay handshake is not evidence that direct traversal works"
+        );
+        assert_eq!(
+            state.phase,
+            Phase::Idle {
+                next_attempt: Millis::from_secs(38)
+            },
+            "the pending retry has to survive the keepalive"
         );
     }
 

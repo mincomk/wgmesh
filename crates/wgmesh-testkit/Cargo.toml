@@ -1,6 +1,6 @@
 [package]
-name = "wgmesh-ports"
-description = "The traits the use cases depend on: the coordinator, WireGuard, discovery and the clock."
+name = "wgmesh-testkit"
+description = "In-memory adapters, a hand-moved clock and a NAT simulator for the traversal tests."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,4 +11,5 @@ workspace = true
 
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
+wgmesh-ports = { path = "../wgmesh-ports" }
 async-trait = "0.1"

@@ -1,6 +1,6 @@
 [package]
 name = "wgmesh-config"
-description = "Configuration loading, defaults and validation."
+description = "Settings: defaults, parsing and validation of agent.toml."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,5 @@ workspace = true
 
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

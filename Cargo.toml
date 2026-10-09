@@ -12,6 +12,7 @@ members = [
     "crates/wgmesh-relay",
     "crates/wgmesh-secrets",
     "crates/wgmesh-state",
+    "crates/wgmesh-testkit",
     "crates/wgmesh-wireguard",
     "xtask",
 ]

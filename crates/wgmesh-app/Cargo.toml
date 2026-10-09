@@ -12,3 +12,6 @@ workspace = true
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
 wgmesh-ports = { path = "../wgmesh-ports" }
+
+[dev-dependencies]
+wgmesh-testkit = { path = "../wgmesh-testkit" }

@@ -21,6 +21,11 @@ use serde_json::Value;
 const ALLOWED: &[(&str, &[&str], &[&str])] = &[
     ("wgmesh-core", &[], &["blake2"]),
     ("wgmesh-ports", &["wgmesh-core"], &["async-trait"]),
+    (
+        "wgmesh-testkit",
+        &["wgmesh-core", "wgmesh-ports"],
+        &["async-trait"],
+    ),
     ("wgmesh-app", &["wgmesh-core", "wgmesh-ports"], &["tracing"]),
     (
         "wgmesh-config",
