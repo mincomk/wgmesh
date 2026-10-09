@@ -261,7 +261,7 @@ async fn the_metrics_endpoint_renders_text_that_parses() {
 
 #[tokio::test]
 async fn a_configuration_change_is_announced_within_a_second() {
-    let (app, store, services, network, _dir) = harness().await;
+    let (app, store, services, _network, _dir) = harness().await;
     let mut updates = services.updates.subscribe();
     let watcher = watch_config(services.clone());
 
