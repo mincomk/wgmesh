@@ -1,0 +1,511 @@
+### fmt
+fmt=0
+### clippy
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking typenum v1.20.1
+    Checking cmov v0.5.4
+   Compiling serde_core v1.0.229
+    Checking zmij v1.0.23
+    Checking itoa v1.0.18
+    Checking memchr v2.8.3
+   Compiling syn v3.0.6
+    Checking cfg-if v1.0.5
+   Compiling libc v0.2.190
+    Checking ctutils v0.4.2
+   Compiling semver v1.0.28
+   Compiling getrandom v0.4.3
+    Checking hybrid-array v0.4.15
+   Compiling syn v2.0.119
+    Checking cpufeatures v0.3.1
+    Checking zeroize v1.9.1
+   Compiling rustc_version v0.4.1
+    Checking subtle v2.6.1
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking signature v3.0.0
+   Compiling thiserror v2.0.21
+    Checking digest v0.11.3
+    Checking serde_json v1.0.151
+    Checking winnow v1.0.4
+    Checking blake2 v0.11.0
+   Compiling curve25519-dalek v5.0.0
+    Checking wgmesh-core v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-core)
+    Checking toml_parser v1.1.5+spec-1.1.0
+    Checking sha2 v0.11.0
+   Compiling serde_derive v1.0.229
+   Compiling async-trait v0.1.92
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling thiserror-impl v2.0.21
+    Checking ed25519 v3.0.0
+    Checking serde_spanned v1.1.2
+    Checking toml_datetime v1.1.2+spec-1.1.0
+    Checking rand_core v0.10.1
+    Checking toml_writer v1.1.3+spec-1.1.0
+    Checking wgmesh-proto v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-proto)
+    Checking base64ct v1.8.3
+   Compiling rustix v1.1.5
+    Checking toml v1.1.8+spec-1.1.0
+    Checking linux-raw-sys v0.12.1
+    Checking bitflags v2.13.2
+    Checking fastrand v2.5.0
+    Checking wgmesh-ports v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-ports)
+    Checking once_cell v1.21.4
+    Checking xtask v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/xtask)
+    Checking x25519-dalek v3.0.0
+    Checking serde v1.0.229
+    Checking ed25519-dalek v3.0.0
+    Checking wgmesh-app v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-app)
+    Checking wgmesh-client v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-client)
+    Checking wgmesh-wireguard v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-wireguard)
+    Checking wgmesh-secrets v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-secrets)
+    Checking wgmesh-state v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-state)
+    Checking wgmesh-config v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-config)
+    Checking wgmesh-conformance v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-conformance)
+    Checking tempfile v3.27.0
+    Checking wgmesh-coordinator v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-coordinator)
+    Checking wgmesh-relay v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-relay)
+    Checking wgmesh-cli v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 43s
+clippy=0
+### build
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling serde_core v1.0.229
+   Compiling cfg-if v1.0.5
+   Compiling cpufeatures v0.3.1
+   Compiling wgmesh-core v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-core)
+   Compiling zeroize v1.9.1
+   Compiling subtle v2.6.1
+   Compiling winnow v1.0.4
+   Compiling signature v3.0.0
+   Compiling sha2 v0.11.0
+   Compiling libc v0.2.190
+   Compiling curve25519-dalek v5.0.0
+   Compiling ed25519 v3.0.0
+   Compiling rand_core v0.10.1
+   Compiling wgmesh-ports v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-ports)
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling getrandom v0.4.3
+   Compiling ed25519-dalek v3.0.0
+   Compiling x25519-dalek v3.0.0
+   Compiling wgmesh-proto v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-proto)
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+   Compiling serde_spanned v1.1.2
+   Compiling thiserror v2.0.21
+   Compiling base64ct v1.8.3
+   Compiling wgmesh-app v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-app)
+   Compiling wgmesh-client v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-client)
+   Compiling toml v1.1.8+spec-1.1.0
+   Compiling wgmesh-wireguard v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-wireguard)
+   Compiling wgmesh-secrets v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-secrets)
+   Compiling wgmesh-state v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-state)
+   Compiling wgmesh-conformance v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-conformance)
+   Compiling wgmesh-config v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-config)
+   Compiling xtask v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/xtask)
+   Compiling wgmesh-coordinator v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-coordinator)
+   Compiling wgmesh-relay v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-relay)
+   Compiling wgmesh-cli v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 38s
+build=0
+### test
+   Compiling bitflags v2.13.2
+   Compiling linux-raw-sys v0.12.1
+   Compiling fastrand v2.5.0
+   Compiling once_cell v1.21.4
+   Compiling wgmesh-coordinator v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-coordinator)
+   Compiling wgmesh-cli v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-cli)
+   Compiling wgmesh-relay v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-relay)
+   Compiling rustix v1.1.5
+   Compiling wgmesh-conformance v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-conformance)
+   Compiling wgmesh-app v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-app)
+   Compiling wgmesh-client v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-client)
+   Compiling tempfile v3.27.0
+   Compiling wgmesh-wireguard v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-wireguard)
+   Compiling wgmesh-ports v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-ports)
+   Compiling xtask v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/xtask)
+   Compiling wgmesh-proto v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-proto)
+   Compiling wgmesh-config v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-config)
+   Compiling wgmesh-state v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-state)
+   Compiling wgmesh-secrets v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-secrets)
+   Compiling wgmesh-core v0.1.0 (/home/attacca/sessions/4fd7164dd6594fb6ac0c931de5b6fd86/wgmesh/crates/wgmesh-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 49s
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_app-fb4babf74705476b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/startup.rs (target/debug/deps/startup-f4611e1bbc3beedb)
+
+running 10 tests
+test a_report_observation_becomes_a_coordinator_call ... ok
+test a_device_with_no_state_and_no_token_fails_clearly ... ok
+test a_port_failure_keeps_its_class ... ok
+test a_pin_that_disagrees_with_the_state_stops_the_work ... ok
+test a_default_route_is_refused_before_any_change_reaches_the_kernel ... ok
+test a_second_convergence_is_a_no_op ... ok
+test clearing_the_state_re_enrolls_without_touching_the_keys ... ok
+test a_start_enrolls_converges_and_reaches_the_kernel ... ok
+test the_kernel_is_the_authority_on_what_it_holds ... ok
+test the_traversal_state_machine_drives_the_kernel ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.95s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_cli-01d1b4335bd5e637)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/main.rs (target/debug/deps/wgmesh-b63ae8d0836bb1fe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_client-22423e6198018bcd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_config-58030f3808095e3f)
+
+running 40 tests
+test coordinator::tests::the_coordinator_defaults_are_the_ones_the_blueprint_ships ... ok
+test relay::tests::the_relay_defaults_are_the_ones_the_blueprint_ships ... ok
+test route::tests::a_prefix_keeps_the_shape_core_uses ... ok
+test agent::tests::the_section_defaults_are_the_ones_the_blueprint_ships ... ok
+test route::tests::a_prefix_round_trips_through_its_text_form ... ok
+test route::tests::a_prefix_that_is_not_a_cidr_prefix_is_rejected ... ok
+test route::tests::a_zero_metric_means_no_metric_at_all ... ok
+test route::tests::the_address_policy_accepts_auto_none_and_a_prefix ... ok
+test route::tests::the_catch_all_prefixes_are_recognized ... ok
+test relay::tests::a_relay_file_only_carries_what_it_changes ... ok
+test route::tests::the_prefix_policy_accepts_auto_none_and_a_list ... ok
+test coordinator::tests::a_coordinator_file_only_carries_what_it_changes ... ok
+test route::tests::the_relay_pool_accepts_names_and_lists ... ok
+test route::tests::the_route_section_renders_back_to_what_it_was_read_from ... ok
+test route::tests::the_route_table_accepts_names_and_numbers ... ok
+test tests::an_environment_variable_without_the_prefix_is_ignored ... ok
+test tests::the_defaults_render_every_section ... ok
+test tests::a_file_only_has_to_carry_what_it_wants_to_change ... ok
+test tests::a_flag_beats_a_file_without_an_environment_in_between ... ok
+test tests::the_environment_layer_understands_nesting_lists_and_bare_words ... ok
+test tests::an_unknown_key_is_rejected_by_name ... ok
+test tests::the_shipped_defaults_literally_match_the_blueprint ... ok
+test tests::the_defaults_survive_a_round_trip_through_a_file ... ok
+test validate::tests::a_clean_configuration_has_nothing_to_say ... ok
+test validate::tests::a_key_file_outside_the_state_directory_is_warned_about_not_refused ... ok
+test validate::tests::a_missing_url_and_a_missing_pin_are_both_reported ... ok
+test validate::tests::a_pin_that_is_not_a_digest_is_rejected ... ok
+test validate::tests::a_punch_window_that_outlasts_the_keepalive_is_rejected ... ok
+test tests::the_four_layers_are_applied_in_order ... ok
+test validate::tests::a_relative_state_directory_is_rejected ... ok
+test validate::tests::a_url_that_is_not_https_or_carries_userinfo_is_rejected ... ok
+test validate::tests::an_empty_or_flat_backoff_is_rejected ... ok
+test validate::tests::an_empty_relay_pool_is_refused ... ok
+test validate::tests::an_interface_name_longer_than_the_kernel_accepts_is_refused ... ok
+test validate::tests::an_unmanaged_table_with_a_prefix_list_is_refused ... ok
+test validate::tests::asking_for_two_ways_to_carry_the_catch_all_is_refused ... ok
+test validate::tests::every_problem_is_reported_at_once ... ok
+test validate::tests::the_default_route_is_refused_in_the_prefix_list ... ok
+test validate::tests::the_relay_and_coordinator_configurations_are_checked_too ... ok
+test validate::tests::the_shipped_relay_and_coordinator_defaults_are_clean ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.32s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_conformance-45f72985f7b4b89a)
+
+running 6 tests
+test coordinator::tests::a_pair_is_not_rehomed_while_its_relay_answers ... ok
+test coordinator::tests::a_pair_is_homed_once_both_ends_name_each_other ... ok
+test coordinator::tests::both_observations_arm_the_punch ... ok
+test coordinator::tests::no_healthy_relay_means_no_assignment ... ok
+test coordinator::tests::no_source_file_constructs_a_udp_socket ... ok
+test coordinator::tests::pairs_spread_over_the_fleet_and_survive_a_relay_loss ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running unittests src/bin/lab-coordinator.rs (target/debug/deps/lab_coordinator-c3326dc13c5f6333)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/lab-relayd.rs (target/debug/deps/lab_relayd-dec15a7a8636df28)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/coordinator_udp.rs (target/debug/deps/coordinator_udp-c58dc3184fcff760)
+
+running 1 test
+test the_coordinator_holds_no_udp_socket ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.37s
+
+     Running tests/fleet.rs (target/debug/deps/fleet-95d88c39ecb0beb6)
+
+running 1 test
+test a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.18s
+
+     Running tests/promotion.rs (target/debug/deps/promotion-fa26d6fe61fdb2a0)
+
+running 6 tests
+test the_traversal_timings_are_the_designs_own ... ok
+test restricted_plus_restricted_punches_a_direct_path ... ok
+test cone_plus_restricted_punches_a_direct_path ... ok
+test cone_plus_cone_punches_a_direct_path ... ok
+test restricted_plus_cone_punches_a_direct_path ... ok
+test symmetric_plus_symmetric_stays_relayed_and_backs_off ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.13s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_coordinator-d2d78dafa7948e51)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running unittests src/main.rs (target/debug/deps/wgmeshd-f014f57a32f19e1a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_core-f9e80167866c04a6)
+
+running 27 tests
+test route::tests::exit_peer_must_name_a_configured_peer ... ok
+test route::tests::none_prefixes_and_an_unmanaged_table_install_nothing ... ok
+test route::tests::exit_peer_carries_the_catch_all_while_the_mesh_stays_specific ... ok
+test route::tests::any_policy_is_only_meaningful_for_a_single_peer ... ok
+test route::tests::a_numbered_table_is_carried_into_every_route ... ok
+test route::tests::auto_prefixes_take_the_network_and_advertised_bands ... ok
+test route::tests::only_prefixes_selects_the_band_and_drops_the_rest ... ok
+test route::tests::peer_policy_keeps_each_peer_on_its_own_prefixes ... ok
+test route::tests::plan_routes_adds_and_removes_against_what_is_installed ... ok
+test route::tests::the_default_route_is_never_installed ... ok
+test tests::a_relayed_handshake_does_not_pull_the_punch_forward ... ok
+test tests::a_relayed_handshake_does_not_reset_an_armed_backoff ... ok
+test tests::a_relayed_handshake_during_a_probe_counts_as_a_failed_attempt ... ok
+test tests::assignment_arms_the_relay_path ... ok
+test tests::candidate_ranking_prefers_lan_then_freshest ... ok
+test tests::diff_adds_updates_and_removes ... ok
+test tests::degraded_direct_path_reverts_to_the_relay_and_backs_off ... ok
+test tests::failed_punch_falls_back_then_retries_with_backoff ... ok
+test tests::no_candidates_keeps_the_relay_path ... ok
+test tests::mac1_pins_the_intended_recipient ... ok
+test tests::punch_starts_after_the_delay_and_holds_direct ... ok
+test tests::mac1_rejects_wrong_shape ... ok
+test tests::relay_pins_the_source_address_until_it_goes_stale ... ok
+test tests::relay_rejects_packets_that_are_not_wireguard_shaped ... ok
+test tests::unassigned_pair_is_dropped ... ok
+test tests::reassignment_drops_stale_observations_and_arms_the_new_relay ... ok
+test tests::relay_forwards_only_assigned_pairs_from_known_slots ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_ports-a70604fc01d766fd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_proto-2429ac660097ee98)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_relay-ad889887f6c5e258)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/wgmesh_relayd-20d1fc2523d0c8a1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_secrets-a23b5c82ae8161f3)
+
+running 29 tests
+test atomic::tests::a_secret_directory_is_created_private_and_an_existing_one_is_left_alone ... ok
+test file::tests::a_key_file_that_is_not_a_key_is_reported_with_its_path ... ok
+test atomic::tests::a_secret_is_written_with_its_mode_and_leaves_nothing_behind ... ok
+test file::tests::a_key_is_generated_once_and_then_read ... ok
+test file::tests::a_generated_x25519_key_has_a_stable_public_half ... ok
+test file::tests::require_existing_never_writes_anything ... ok
+test file::tests::signing_with_a_tunnel_key_is_refused_rather_than_silently_wrong ... ok
+test file::tests::a_generated_key_lands_in_a_0700_directory_as_a_0600_file ... ok
+test file::tests::the_key_file_names_are_the_ones_the_blueprint_names ... ok
+test generate::tests::a_public_key_depends_on_the_private_key_alone ... ok
+test generate::tests::a_public_key_that_is_not_a_point_verifies_nothing ... ok
+test file::tests::an_existing_key_is_kept_rather_than_replaced ... ok
+test generate::tests::a_signature_does_not_verify_under_another_key ... ok
+test generate::tests::a_signature_verifies_and_a_changed_message_does_not ... ok
+test file::tests::require_existing_reads_a_provisioned_file_and_leaves_it_alone ... ok
+test generate::tests::the_clamping_that_the_curve_does_is_the_one_wireguard_does ... ok
+test file::tests::an_ed25519_key_signs_and_its_signature_verifies ... ok
+test file::tests::a_raw_key_and_a_base64_key_load_to_the_same_secret ... ok
+test generate::tests::two_generated_keys_are_not_the_same_key ... ok
+test generate::tests::the_curves_agree_with_an_independent_implementation ... ok
+test parse::tests::a_key_survives_the_round_trip_through_its_text_form ... ok
+test parse::tests::a_key_written_by_wg_genkey_reads_back_to_the_same_bytes ... ok
+test parse::tests::a_raw_key_is_never_confused_with_base64 ... ok
+test parse::tests::anything_that_is_neither_raw_nor_one_base64_line_is_refused ... ok
+test file::tests::the_modes_can_be_relaxed_for_a_caller_that_needs_it ... ok
+test parse::tests::one_line_of_base64_is_a_key_with_or_without_a_trailing_newline ... ok
+test parse::tests::thirty_two_raw_bytes_are_a_key ... ok
+test tests::a_parse_error_is_named_by_the_file_it_came_from ... ok
+test tests::an_error_that_already_names_a_file_is_left_alone ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_state-1d52a6434d356b9f)
+
+running 25 tests
+test atomic::tests::write_under_the_callers_umask ... ignored, spawned by the umask test
+test atomic::tests::an_existing_directory_is_not_re_moded ... ok
+test file::tests::a_first_start_reports_empty_rather_than_an_error ... ok
+test file::tests::a_file_without_a_schema_version_is_backed_up_too ... ok
+test atomic::tests::the_mode_of_a_written_file_is_exactly_the_one_asked_for ... ok
+test atomic::tests::an_atomic_write_lands_whole_and_leaves_no_temporary_behind ... ok
+test atomic::tests::a_stale_temporary_from_a_killed_writer_does_not_block_the_next_write ... ok
+test file::tests::a_corrupt_state_file_is_backed_up_too ... ok
+test file::tests::a_saved_state_comes_back_unchanged ... ok
+test file::tests::crash_writer ... ignored, spawned by the interrupted write test
+test file::tests::a_leftover_temporary_never_becomes_the_state_file ... ok
+test file::tests::the_file_name_is_the_one_the_blueprint_names ... ok
+test tests::a_new_state_carries_the_current_schema_and_nothing_else ... ok
+test file::tests::a_second_reset_does_not_overwrite_the_first_backup ... ok
+test tests::a_secret_looking_key_is_refused ... ok
+test tests::a_state_that_is_not_marked_with_the_schema_is_not_current ... ok
+test tests::an_ordinary_state_has_nothing_a_secret_guard_objects_to ... ok
+test file::tests::clear_removes_the_state_and_its_temporary ... ok
+test tests::the_data_tables_are_not_read_as_field_names ... ok
+test file::tests::the_state_file_mode_is_0640 ... ok
+test file::tests::the_store_refuses_a_document_that_carries_a_secret ... ok
+test tests::the_whole_document_survives_a_round_trip_through_json ... ok
+test file::tests::an_unknown_schema_is_backed_up_and_the_store_starts_over ... ok
+
+running 1 test
+test atomic::tests::write_under_the_callers_umask ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.24s
+
+test atomic::tests::the_mode_is_exact_even_under_a_umask_that_would_strip_it ... ok
+test file::tests::a_writer_killed_mid_write_leaves_the_previous_document_in_place ... ok
+
+test result: ok. 23 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.97s
+
+     Running unittests src/lib.rs (target/debug/deps/wgmesh_wireguard-612ef8cd584ed0e1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/main.rs (target/debug/deps/xtask-6765115b8deb0662)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests wgmesh_app
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests wgmesh_cli
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests wgmesh_client
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests wgmesh_config
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Doc-tests wgmesh_conformance
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests wgmesh_coordinator
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+   Doc-tests wgmesh_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests wgmesh_ports
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests wgmesh_proto
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+   Doc-tests wgmesh_relay
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Doc-tests wgmesh_secrets
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests wgmesh_state
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests wgmesh_wireguard
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test=0
+### check-deps
+xtask check-deps: ok
+deps=0
+### check-style
+xtask check-style: ok
+style=0
