@@ -11,3 +11,4 @@ workspace = true
 
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
+async-trait = "0.1"
