@@ -7,6 +7,7 @@ members = [
     "crates/wgmesh-config",
     "crates/wgmesh-coordinator",
     "crates/wgmesh-core",
+    "crates/wgmesh-metrics",
     "crates/wgmesh-ports",
     "crates/wgmesh-proto",
     "crates/wgmesh-relay",

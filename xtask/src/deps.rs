@@ -55,8 +55,12 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
     (
         "wgmesh-proto",
         &["wgmesh-core"],
-        &["serde", "base64ct", "hex"],
+        &["serde", "base64ct", "hex", "base64", "sha2", "thiserror"],
     ),
+    // The metrics exposition is a wire format, so it is a crate of its own
+    // rather than a corner of another one. It has no dependencies at all: a
+    // counter is a number in a map.
+    ("wgmesh-metrics", &[], &[]),
     (
         "wgmesh-wireguard",
         &["wgmesh-core", "wgmesh-ports"],
@@ -76,8 +80,25 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-config",
             "wgmesh-state",
             "wgmesh-secrets",
+            "wgmesh-metrics",
         ],
-        &["axum", "sqlx", "tokio", "tower-http"],
+        &[
+            "axum",
+            "sqlx",
+            "tokio",
+            "tower-http",
+            "base64",
+            "ed25519-dalek",
+            "hex",
+            "rand",
+            "serde",
+            "serde_json",
+            "sha2",
+            "thiserror",
+            "tokio-stream",
+            "tracing",
+            "tracing-subscriber",
+        ],
     ),
     (
         "wgmesh-relay",
@@ -89,8 +110,18 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-state",
             "wgmesh-secrets",
             "wgmesh-client",
+            "wgmesh-metrics",
         ],
-        &["tokio", "socket2", "tracing"],
+        &[
+            "tokio",
+            "socket2",
+            "tracing",
+            "base64",
+            "serde",
+            "serde_json",
+            "thiserror",
+            "tracing-subscriber",
+        ],
     ),
     (
         "wgmesh-cli",
@@ -107,7 +138,13 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-coordinator",
             "wgmesh-relay",
         ],
-        &["clap", "tokio", "tracing-subscriber"],
+        &[
+            "clap",
+            "tokio",
+            "tracing-subscriber",
+            "serde_json",
+            "thiserror",
+        ],
     ),
 ];
 

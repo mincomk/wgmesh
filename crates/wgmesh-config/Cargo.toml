@@ -11,3 +11,6 @@ workspace = true
 
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"

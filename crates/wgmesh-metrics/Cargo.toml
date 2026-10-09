@@ -1,0 +1,12 @@
+[package]
+name = "wgmesh-metrics"
+description = "Prometheus exposition as a plain value: counters, gauges and the text a scraper reads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
