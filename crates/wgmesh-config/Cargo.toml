@@ -10,4 +10,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1"
 wgmesh-core = { path = "../wgmesh-core" }

@@ -107,7 +107,7 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-coordinator",
             "wgmesh-relay",
         ],
-        &["clap", "tokio", "tracing-subscriber"],
+        &["clap", "serde", "serde_json", "tokio", "tracing-subscriber"],
     ),
 ];
 
