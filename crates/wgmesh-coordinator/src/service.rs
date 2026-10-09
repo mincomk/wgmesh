@@ -29,6 +29,12 @@ pub struct Services {
     pub join_policy: JoinPolicy,
     pub place_policy: PlacePolicy,
     pub keyset_ttl_secs: u64,
+    /// The allowance `/v1/join` and `/v1/relay/enroll` share, per client
+    /// address, per minute. It is a field rather than a constant because the
+    /// operator's `[policy] join_rate_limit_per_minute` has to reach the
+    /// limiter — a ceiling that is configured and does not apply is worse than
+    /// none, because the operator has stopped watching.
+    pub join_rate_limit_per_minute: u32,
     /// Announces every configuration change to whoever is streaming. The watch
     /// that feeds it is started explicitly (`http::watch_config`), so a test can
     /// start it too rather than depending on a daemon being up.
@@ -44,8 +50,16 @@ impl Services {
             join_policy: JoinPolicy::default(),
             place_policy: PlacePolicy::default(),
             keyset_ttl_secs: 300,
+            join_rate_limit_per_minute: crate::http::JOIN_RATE_LIMIT_PER_MINUTE,
             updates: broadcast::channel(64).0,
         }
+    }
+
+    /// The same services with a different allowance. A daemon that reads
+    /// `[policy] join_rate_limit_per_minute` calls this once at startup.
+    pub fn with_join_rate_limit(mut self, per_minute: u32) -> Self {
+        self.join_rate_limit_per_minute = per_minute;
+        self
     }
 
     pub fn join_device(&self) -> JoinDevice<'_> {

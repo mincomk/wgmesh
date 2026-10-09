@@ -49,10 +49,13 @@ pub struct AppState {
 /// signature — they are the ones a principal cannot sign for yet. Everything
 /// else sits behind one of the two extractors below.
 pub fn router(services: Services) -> Router {
+    // The allowance is the services' — which is `JOIN_RATE_LIMIT_PER_MINUTE`
+    // unless a daemon has read a larger or smaller one from its configuration.
+    let allowance = services.join_rate_limit_per_minute;
     let state = AppState {
         services,
         limiter: Arc::new(Mutex::new(Metered::new(
-            f64::from(JOIN_RATE_LIMIT_PER_MINUTE),
+            f64::from(allowance),
             60_000,
             RATE_LIMIT_TRACKED_IPS,
         ))),

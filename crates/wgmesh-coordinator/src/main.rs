@@ -26,12 +26,16 @@ use wgmesh_proto::{
 #[command(name = "wgmeshd", about = "the wgmesh coordinator")]
 struct Cli {
     /// SQLite URL. TLS is not this process's job: put a reverse proxy in front.
-    #[arg(
-        long,
-        global = true,
-        default_value = "sqlite://wgmesh-coordinator.db?mode=rwc"
-    )]
-    database: String,
+    /// Left out, `[database] url` from `--config` is used, and failing that the
+    /// default below.
+    #[arg(long, global = true)]
+    database: Option<String>,
+
+    /// The coordinator's own settings file. Only `[policy]` is read so far —
+    /// `join_rate_limit_per_minute` in particular, which is otherwise a value
+    /// the operator can set and the daemon ignores.
+    #[arg(long, global = true)]
+    config: Option<std::path::PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -41,8 +45,10 @@ struct Cli {
 enum Command {
     /// Serve the API on plain HTTP.
     Run {
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        listen: String,
+        /// Left out, `[api] listen` from `--config` is used, and failing that
+        /// the default.
+        #[arg(long)]
+        listen: Option<String>,
     },
     /// Create the database and a first network.
     Bootstrap {
@@ -173,10 +179,44 @@ async fn main() -> ExitCode {
     }
 }
 
+/// What the daemon uses when neither the command line nor the settings file
+/// says. These were clap's `default_value`s before, which is why the file could
+/// not supply them: a default is indistinguishable from a value the operator
+/// typed.
+const DEFAULT_DATABASE: &str = "sqlite://wgmesh-coordinator.db?mode=rwc";
+const DEFAULT_LISTEN: &str = "127.0.0.1:8080";
+
 async fn run() -> Result<(), String> {
     let cli = Cli::parse();
+
+    // The settings file is read before anything else, because the daemon's own
+    // knobs live in it: the database to open, the address to bind, and the
+    // allowance on the two unauthenticated routes. It is the file the NixOS
+    // module renders and the operator edits, and `wgmeshd run --config …` is how
+    // that module starts this binary. A command-line flag wins over the file;
+    // the constants above are the last resort.
+    let settings = match &cli.config {
+        Some(path) => Some(
+            wgmesh_config::resolve_coordinator(
+                &wgmesh_config::Layers::new().file(path).environment(),
+            )
+            .map_err(|error| format!("{}: {error}", path.display()))?,
+        ),
+        None => None,
+    };
+    let database = cli
+        .database
+        .clone()
+        .or_else(|| {
+            settings
+                .as_ref()
+                .map(|settings| settings.database.url.clone())
+        })
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| DEFAULT_DATABASE.to_owned());
+
     let store = Arc::new(
-        Sqlite::open(&cli.database, 8)
+        Sqlite::open(&database, 8)
             .await
             .map_err(|error| error.to_string())?,
     );
@@ -186,7 +226,19 @@ async fn run() -> Result<(), String> {
 
     match cli.command {
         Command::Run { listen } => {
-            let services = Services::new(store, clock);
+            let listen = listen
+                .or_else(|| {
+                    settings
+                        .as_ref()
+                        .map(|settings| settings.api.listen.clone())
+                })
+                .filter(|address| !address.is_empty())
+                .unwrap_or_else(|| DEFAULT_LISTEN.to_owned());
+            let mut services = Services::new(store, clock);
+            if let Some(settings) = &settings {
+                services =
+                    services.with_join_rate_limit(settings.policy.join_rate_limit_per_minute);
+            }
             // The configuration watch lives as long as the daemon does.
             let _watch = wgmesh_coordinator::http::watch_config(services.clone());
             let app = router(services);
@@ -194,7 +246,12 @@ async fn run() -> Result<(), String> {
             let listener = TcpListener::bind(address)
                 .await
                 .map_err(|error| error.to_string())?;
-            println!("wgmeshd listening on http://{address}");
+            // The bound address, not the configured string: with
+            // `api.listen = "127.0.0.1:0"` — and for a wildcard — the two differ,
+            // and the line an operator reads should say where the daemon
+            // actually is.
+            let bound = listener.local_addr().map_err(|error| error.to_string())?;
+            println!("wgmeshd listening on http://{bound}");
             // The peer address is what the per-address limiter on the two
             // unauthenticated routes is built from, so the service has to
             // carry it.

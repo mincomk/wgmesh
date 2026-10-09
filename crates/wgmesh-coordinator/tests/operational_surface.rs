@@ -340,3 +340,34 @@ async fn a_streaming_device_receives_the_change_over_the_wire() {
     );
     watcher.abort();
 }
+
+/// The allowance is the services', not a constant baked into the router.
+///
+/// Before this it was a `const`, so `[policy] join_rate_limit_per_minute` — a
+/// value `wgmesh-config` parses and validates — never reached the limiter.
+#[tokio::test]
+async fn the_join_allowance_comes_from_the_services_not_a_constant() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("coordinator.db");
+    let url = format!("sqlite://{}?mode=rwc", path.display());
+    let store = Arc::new(Sqlite::open(&url, 4).await.expect("open"));
+    store.migrate().await.expect("migrate");
+    let clock = Arc::new(FixedClock::new(Millis::from_secs(NOW_SECS)));
+    let services = Services::new(store, clock).with_join_rate_limit(2);
+    let app = router(services);
+
+    for index in 0..2 {
+        let (status, body) = call(&app, join_request(address(1))).await;
+        assert_ne!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "request {index} inside the allowance was refused: {body}"
+        );
+    }
+    let (status, body) = call(&app, join_request(address(1))).await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "an allowance of two per minute has to refuse the third: {body}"
+    );
+}
