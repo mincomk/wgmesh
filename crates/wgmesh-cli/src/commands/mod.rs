@@ -1,6 +1,7 @@
 pub mod doctor;
 pub mod peers;
 pub mod routes;
+pub mod trust;
 
 use std::io::Write;
 

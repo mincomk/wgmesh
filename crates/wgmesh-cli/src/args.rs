@@ -19,6 +19,10 @@ pub enum Command {
     Peers,
     RoutesPlan,
     RoutesReset,
+    /// Print the pin the configuration names and the pin the state holds.
+    TrustShow,
+    /// Move the state's pin onto the pin the configuration names.
+    TrustRotate,
     Doctor,
 }
 
@@ -55,6 +59,20 @@ impl Args {
                     });
                 }
                 "doctor" => command = Some(Command::Doctor),
+                "trust" => {
+                    let subcommand = args.next().ok_or_else(|| {
+                        CliError::Usage(format!("`{program} trust` needs one of show, rotate"))
+                    })?;
+                    command = Some(match subcommand.as_str() {
+                        "show" => Command::TrustShow,
+                        "rotate" => Command::TrustRotate,
+                        other => {
+                            return Err(CliError::Usage(format!(
+                                "`{program} trust {other}` is not a command; try show or rotate"
+                            )));
+                        }
+                    });
+                }
                 "--config" => config = PathBuf::from(next_value(&mut args, "--config")?),
                 "--state" => state = PathBuf::from(next_value(&mut args, "--state")?),
                 "--interface" => interface = next_value(&mut args, "--interface")?,
@@ -99,6 +117,8 @@ fn usage(program: &str) -> String {
          {program} peers        [--config PATH] [--state PATH] [--json]\n  \
          {program} routes plan  [--config PATH] [--state PATH] [--interface NAME] [--json]\n  \
          {program} routes reset [--config PATH] [--interface NAME] [--json]\n  \
+         {program} trust show   [--config PATH] [--state PATH] [--json]\n  \
+         {program} trust rotate [--config PATH] [--state PATH]\n  \
          {program} doctor       [--config PATH] [--json]"
     )
 }

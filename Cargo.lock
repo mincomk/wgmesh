@@ -2156,6 +2156,7 @@ dependencies = [
  "wgmesh-app",
  "wgmesh-config",
  "wgmesh-core",
+ "wgmesh-ports",
  "wgmesh-proto",
  "wgmesh-relay",
  "wgmesh-secrets",

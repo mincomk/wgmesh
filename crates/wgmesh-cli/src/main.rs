@@ -35,6 +35,8 @@ fn dispatch(args: &Args, out: &mut dyn Write) -> Result<(), CliError> {
         Command::Peers => commands::peers::run(args, out),
         Command::RoutesPlan => commands::routes::plan(args, out),
         Command::RoutesReset => commands::routes::reset(args, out),
+        Command::TrustShow => commands::trust::show(args, out),
+        Command::TrustRotate => commands::trust::rotate(args, out),
         Command::Doctor => commands::doctor::run(args, out),
     }
 }
