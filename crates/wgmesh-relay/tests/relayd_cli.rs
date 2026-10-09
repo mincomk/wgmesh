@@ -468,7 +468,7 @@ fn the_relay_toml_the_nixos_module_renders_is_understood() {
     assert!(!output.status.success());
     let message = text(&output);
     assert!(
-        message.contains("coordinator unreachable at https://127.0.0.1:1"),
+        message.contains("unreachable") && message.contains("https://127.0.0.1:1"),
         "the coordinator URL has to come out of the [coordinator] section:\n{message}"
     );
     assert!(

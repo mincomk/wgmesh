@@ -16,10 +16,10 @@
 // rather than the certificate.
 //
 // **Every request is signed over the bytes that are actually sent.** The canonical string is
-// `wgmesh_proto::sign::canonical(method, path, sha256(body), timestamp, nonce)`, so the body the
-// signature covers is the body in the request. The nonce is fresh randomness per request, and the
-// timestamp comes from the `Clock` port, which is why a test can replay a whole conversation at a
-// fixed instant.
+// `wgmesh_proto::sign::canonical(method, path, body, timestamp, nonce)` — the body itself, which
+// that function hashes — so what the signature covers is exactly what the request carries. The
+// nonce is fresh randomness per request, and the timestamp comes from the `Clock` port, which is
+// why a test can replay a whole conversation at a fixed instant.
 //
 // **A failure carries what a caller may do about it.** `PortError`'s class is computed here, once,
 // from the status and the kind of failure — see `Coordinator::status_error` for the table. The one
@@ -30,4 +30,7 @@ pub mod http;
 pub mod pin;
 
 pub use http::{ConfigExchange, Coordinator, DEFAULT_TIMEOUT_SECS, learn_pin};
-pub use pin::{PinnedVerifier, client_config, spki_sha256};
+// `pin`'s verifier and its rustls configuration stay in the module they belong to: the only thing
+// a caller outside this crate needs from it is the digest `spki_sha256` computes. `learn_pin` is
+// the one exception, and it is the whole of `wgmesh pin`.
+pub use pin::spki_sha256;

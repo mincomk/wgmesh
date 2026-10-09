@@ -655,10 +655,11 @@ async fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
     // The routing and forwarding checks, over whatever this build can actually see.
     //
     // The peer-dependent half of them needs the coordinator's answer: which peers exist and which
-    // bands they advertise. The device fetches that itself, over the HTTPS client, with the pin the
-    // configuration names and the identity the state file holds — so the checks run on a host that
-    // is simply not enrolled yet no further than on one that is. `--snapshot` remains for the case
-    // this cannot cover: reading an answer that was captured somewhere else.
+    // bands they advertise. The device fetches that itself, with the pin the configuration names
+    // and the identity the state file holds, so a device that has enrolled needs nothing fetched by
+    // hand — and one that has not is told why the checks were skipped rather than left to produce a
+    // snapshot itself. `--snapshot` remains for the case this cannot cover: reading an answer that
+    // was captured somewhere else.
     let (snapshot, snapshot_note) = match &args.snapshot {
         Some(path) => match crate::doctor::load_snapshot(path) {
             Ok(snapshot) => (Some(snapshot), None),

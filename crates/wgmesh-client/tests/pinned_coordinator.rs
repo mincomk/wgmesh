@@ -36,10 +36,10 @@ use wgmesh_coordinator::clock::FixedClock;
 use wgmesh_coordinator::router;
 use wgmesh_coordinator::service::Services;
 use wgmesh_coordinator::store::Sqlite;
-use wgmesh_core::{Allowed, Millis, PublicKey};
+use wgmesh_core::{Allowed, CandidateKind, DeviceId, Endpoint, Millis, PublicKey};
 use wgmesh_ports::{
-    Class, Clock, CoordinatorApi, EnrollRequest, Enrollment, JoinToken, SecretError, SecretStore,
-    Signature, Spki,
+    Class, Clock, CoordinatorApi, EnrollRequest, Enrollment, JoinToken, Observation, PunchOutcome,
+    PunchReport, SecretError, SecretStore, Signature, Spki,
 };
 use wgmesh_proto as naming;
 use wgmesh_proto::api::RelayEnrollBody;
@@ -487,6 +487,87 @@ async fn the_config_etag_round_trips_as_a_304() {
             .expect("stale"),
         ConfigExchange::Fresh { .. }
     ));
+}
+
+// --- what a device reports, and the one report it cannot make ----------------
+
+#[tokio::test]
+async fn a_device_reports_a_punch_and_rotates_its_key_over_the_signed_path() {
+    let harness = Harness::new().await;
+    let signer = Signer::new(harness.key_dir("device"));
+    let client = pinned_client(&harness, &signer, SERVER_PIN);
+    let token = harness.mint(TokenKind::Device, true).await;
+    let device = enrol(&client, &signer, &token, "reporting").await;
+
+    // Both are behind `require_active_device`, so a 200 is the signature, the identity and the
+    // device's state all having been agreed on.
+    client
+        .report_punch(PunchReport {
+            device: device.device,
+            peer: device.device,
+            outcome: PunchOutcome::Direct,
+            at: Millis::from_secs(NOW_SECS),
+        })
+        .await
+        .expect("a punch is recorded");
+
+    client
+        .rotate(PublicKey::from_bytes([9u8; 32]))
+        .await
+        .expect("a rotation is recorded");
+
+    // The rotation is the device's new tunnel key, and another device's world says so afterwards.
+    let other_key = Signer::new(harness.key_dir("peer"));
+    let other_token = harness.mint(TokenKind::Device, true).await;
+    let other = pinned_client(&harness, &other_key, SERVER_PIN);
+    enrol(&other, &other_key, &other_token, "peer").await;
+    let snapshot = other.config(None).await.expect("the world");
+    let rotated = snapshot
+        .peers
+        .iter()
+        .find(|peer| peer.id == device.device)
+        .expect("the rotated device is still a peer");
+    assert_eq!(rotated.key, PublicKey::from_bytes([9u8; 32]));
+}
+
+#[tokio::test]
+async fn a_report_of_someone_elses_observation_is_refused() {
+    let harness = Harness::new().await;
+    let signer = Signer::new(harness.key_dir("device"));
+    let token = harness.mint(TokenKind::Device, true).await;
+    let client = pinned_client(&harness, &signer, SERVER_PIN);
+    let device = enrol(&client, &signer, &token, "reporting").await;
+
+    // Nothing to report is not an error, and nothing is sent.
+    client
+        .report_observations(&[])
+        .await
+        .expect("an empty report is nothing to do");
+
+    // This device's own observation is what the route carries, and it is accepted.
+    let mine = Observation {
+        device: device.device,
+        endpoint: Endpoint::new("198.51.100.7:4400".parse().expect("an address")),
+        kind: CandidateKind::Observed,
+        at: Millis::from_secs(NOW_SECS),
+    };
+    client
+        .report_observations(&[mine])
+        .await
+        .expect("a device reports where it was seen");
+
+    // A peer is observed by the relay that carries its traffic, which is a relay's report. Saying
+    // otherwise here would be a silent drop of an observation nobody can use, so it is refused.
+    let theirs = Observation {
+        device: DeviceId(device.device.0 + 1),
+        ..mine
+    };
+    let error = client
+        .report_observations(&[theirs])
+        .await
+        .expect_err("a report naming another device must be refused");
+    assert_eq!(error.class(), Class::Fatal, "{error}");
+    assert!(error.detail().contains("names"), "{error}");
 }
 
 // --- the relay's own path ---------------------------------------------------

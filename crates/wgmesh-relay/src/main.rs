@@ -445,11 +445,12 @@ fn pin_of(flags: &Flags, parsed: &ParsedConfig) -> Result<Spki, String> {
 
 /// What a failed call to the coordinator means to an operator.
 ///
-/// A coordinator that cannot be reached is the common case and reads better as itself; the class
-/// comes from the client, so a refused token or a wrong pin keeps the message it was given.
+/// A coordinator that cannot be reached is the common case and reads better as itself, but the
+/// class is the client's: a `429` or a `503` is transient too, and the message says so rather than
+/// claiming nothing answered. A refused token or a wrong pin keeps the message it was given.
 fn coordinator_error(url: &str, error: &PortError) -> String {
     if error.class() == wgmesh_ports::Class::Transient {
-        format!("coordinator unreachable at {url}: {error}")
+        format!("coordinator unreachable or refusing at {url}: {error}")
     } else {
         error.to_string()
     }
@@ -488,8 +489,16 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn serve(flags: &Flags, parsed: &ParsedConfig, state_dir: &Path) -> Result<(), String> {
-    let config = &parsed.relay;
     fs::create_dir_all(state_dir).map_err(|error| format!("{}: {error}", state_dir.display()))?;
+
+    // The id the coordinator assigned is what this relay is called, and it is what the engine
+    // reports in its status snapshot and its heartbeats. `relay.toml` is the operator's file and
+    // carries no id — nothing generates one but enrollment — so the file enrollment wrote fills it
+    // in. Without this a relay signs its requests as `relay_…` and reports an empty name.
+    let mut config = parsed.relay.clone();
+    if let Some(identity) = relay_id_of(state_dir) {
+        config.relay_id = identity;
+    }
 
     let sockets = UdpSlotSockets::new(config.listen);
     let mut engine = RelayEngine::new(sockets, config.clone());
@@ -527,8 +536,9 @@ fn serve(flags: &Flags, parsed: &ParsedConfig, state_dir: &Path) -> Result<(), S
                 );
             }
             Err(detail) => println!(
-                "wgmesh-relayd: no assignment was fetched from {}: {detail} Serving nothing until \
-                 one arrives; pass --assignment-file to serve one from a file.",
+                "wgmesh-relayd: no assignment was fetched from {}: {detail} It will not look \
+                 again: restart this relay once the coordinator answers, or pass \
+                 --assignment-file to serve one from a file.",
                 flags
                     .value("coordinator")
                     .or_else(|| config.coordinator.clone())
@@ -671,8 +681,8 @@ fn render_status(engine: &RelayEngine<UdpSlotSockets>, at: Millis) -> String {
     lines.join("\n")
 }
 
-// The stopgap assignment file. `GET /v1/relay/assignment` carries the same three things
-// as typed wire values once `wgmesh-proto` and `wgmesh-client` exist.
+// The stopgap assignment file. `GET /v1/relay/assignment` carries the same three things as typed
+// wire values, and is where `run` reads them from unless this file names them instead.
 fn parse_assignment(text: &str) -> Result<Assignment, String> {
     let mut slots = Vec::new();
     let mut pairs = Vec::new();
@@ -932,20 +942,12 @@ async fn fetch_assignment(
              relay.toml",
         )?;
     let pin = pin_of(flags, parsed)?;
-    let id_file = state_dir.join(RELAY_ID_FILE);
-    let identity = fs::read_to_string(&id_file).map_err(|error| {
+    let identity = relay_id_of(state_dir).ok_or_else(|| {
         format!(
-            "{}: {error}; run `wgmesh-relayd enroll` first",
-            id_file.display()
+            "{}: no relay id; run `wgmesh-relayd enroll` first",
+            state_dir.join(RELAY_ID_FILE).display()
         )
     })?;
-    let identity = identity.trim().to_string();
-    if identity.is_empty() {
-        return Err(format!(
-            "{} is empty; run `wgmesh-relayd enroll` first",
-            id_file.display()
-        ));
-    }
     let key = RelayKey::open(&state_dir.join("relay.key"));
     let clock = SystemClock;
     let answer = coordinator_client(&url, pin, &key, &clock)?
@@ -954,6 +956,13 @@ async fn fetch_assignment(
         .await
         .map_err(|error| coordinator_error(&url, &error))?;
     assignment_of(&answer)
+}
+
+/// The relay id the coordinator assigned, as enrollment wrote it down.
+fn relay_id_of(state_dir: &Path) -> Option<String> {
+    fs::read_to_string(state_dir.join(RELAY_ID_FILE))
+        .ok()
+        .and_then(|text| non_empty(&text))
 }
 
 /// One comma-separated list of network names.

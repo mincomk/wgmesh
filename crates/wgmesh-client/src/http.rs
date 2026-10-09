@@ -128,6 +128,11 @@ where
         let tls = client_config(&verifier)?;
         let http = reqwest::Client::builder()
             .use_preconfigured_tls(tls)
+            // The pin is checked on the connection to this one origin, so nothing may move the
+            // request to another one: a redirect to a plain http target would be a request with
+            // no TLS and therefore no pin at all, and its body would be read as the world.
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(true)
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
             .map_err(|error| {
@@ -526,6 +531,8 @@ pub async fn learn_pin(origin: &str) -> Result<Spki, PortError> {
     let tls = client_config(&verifier)?;
     let http = reqwest::Client::builder()
         .use_preconfigured_tls(tls)
+        .redirect(reqwest::redirect::Policy::none())
+        .https_only(true)
         .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
         .build()
         .map_err(|error| PortError::fatal(format!("the HTTPS client did not build: {error}")))?;
@@ -533,6 +540,20 @@ pub async fn learn_pin(origin: &str) -> Result<Spki, PortError> {
     verifier.presented().map(Spki::from_bytes).ok_or_else(|| {
         PortError::transient(format!(
             "{origin} completed no handshake, so it presented no key to pin"
+        ))
+    })
+}
+
+/// One address out of the wire, or the failure that names the peer and the text.
+///
+/// `allowed` is the ACL the interface is handed, so an address that does not parse is refused
+/// rather than dropped: a band quietly left out is a peer silently shrunk, and a peer whose own
+/// address was dropped is a peer the kernel has no key for.
+fn address_of(peer: &PeerBody, field: &str, text: &str) -> Result<Allowed, PortError> {
+    parse_prefix(text).ok_or_else(|| {
+        PortError::fatal(format!(
+            "{CONFIG_PATH}: the peer {} {field} `{text}`, which is not an address with a prefix",
+            peer.device_id
         ))
     })
 }
@@ -548,9 +569,7 @@ fn snapshot_of(answer: &ConfigResponse) -> Result<ConfigSnapshot, PortError> {
     let mut advertised = BTreeSet::new();
     for peer in &answer.peers {
         for band in &peer.advertised {
-            if let Some(prefix) = parse_prefix(band) {
-                advertised.insert(prefix);
-            }
+            advertised.insert(address_of(peer, "advertises", band)?);
         }
     }
     Ok(ConfigSnapshot {
@@ -584,13 +603,9 @@ fn peer_spec(peer: &PeerBody, keepalive_secs: u32) -> Result<PeerSpec, PortError
         ))
     })?;
     let mut allowed = BTreeSet::new();
-    if let Some(prefix) = parse_prefix(&peer.tunnel_ip) {
-        allowed.insert(prefix);
-    }
+    allowed.insert(address_of(peer, "holds the address", &peer.tunnel_ip)?);
     for band in &peer.advertised {
-        if let Some(prefix) = parse_prefix(band) {
-            allowed.insert(prefix);
-        }
+        allowed.insert(address_of(peer, "advertises", band)?);
     }
     Ok(PeerSpec {
         id,
@@ -658,7 +673,7 @@ async fn ok_bytes(
     let bytes = response.bytes().await.map_err(|error| {
         PortError::transient(format!("{path}: the answer could not be read: {error}"))
     })?;
-    if status == StatusCode::OK {
+    if status.is_success() {
         return Ok(bytes.to_vec());
     }
     Err(status_error(path, status, &bytes, call))
@@ -694,10 +709,15 @@ fn normalize_origin(origin: &str) -> Result<String, PortError> {
             "{origin}: a coordinator is reached over https, and this address is not one"
         )));
     };
-    if rest.is_empty() || rest.contains('@') || rest.contains('/') {
+    if rest.is_empty()
+        || rest.contains('@')
+        || rest.contains('/')
+        || rest.contains('?')
+        || rest.contains('#')
+    {
         return Err(PortError::fatal(format!(
             "{origin}: a coordinator's origin is a host and an optional port, with no user \
-             information and no path"
+             information, no path and no query"
         )));
     }
     Ok(origin.to_string())
@@ -799,6 +819,42 @@ mod tests {
         );
         assert_eq!(tunnel_prefix("10.77.0.7", "not a cidr"), None);
         assert_eq!(tunnel_prefix("10.77.0.7", "fd00::/64"), None);
+    }
+
+    #[test]
+    fn a_band_that_is_not_an_address_is_refused_rather_than_dropped() {
+        let other = naming::device_id(wgmesh_core::DeviceId(2));
+        // `allowed` is the ACL the interface is handed, so a peer whose own address does not parse
+        // must not become a peer with nothing allowed: it is a disagreement about the world.
+        let peer = PeerBody {
+            device_id: other.clone(),
+            name: "peer".to_string(),
+            wg_pubkey: naming::encode_key(&PublicKey::from_bytes([6u8; 32])),
+            tunnel_ip: "not an address".to_string(),
+            advertised: Vec::new(),
+            relay: None,
+            endpoint: None,
+            state: "active".to_string(),
+        };
+        let error = peer_spec(&peer, 25).expect_err("a peer without an address is not a peer");
+        assert_eq!(error.class(), Class::Fatal, "{error}");
+        assert!(error.detail().contains(&other), "{error}");
+
+        let mut peer = peer;
+        peer.tunnel_ip = "10.77.0.2/32".to_string();
+        peer.advertised = vec!["10.9.0.0/24".to_string(), "192.168.0.0/33".to_string()];
+        let error = peer_spec(&peer, 25).expect_err("a band that is not a prefix is not a band");
+        assert!(error.detail().contains("192.168.0.0/33"), "{error}");
+
+        peer.advertised = vec!["10.9.0.0/24".to_string()];
+        let spec = peer_spec(&peer, 25).expect("both addresses parse");
+        assert_eq!(
+            spec.allowed,
+            vec![
+                Allowed::V4([10, 9, 0, 0], 24),
+                Allowed::V4([10, 77, 0, 2], 32)
+            ]
+        );
     }
 
     #[test]
