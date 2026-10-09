@@ -15,7 +15,7 @@ way.
 | Where | `mincomk/wgmesh`, branch `m0/conformance` → pull request **#10** → `main` |
 | Cut from | `main` at `2c8987d`, 2026-10-09 |
 | Every command here was run on | the Attacca Computer, 2026-10-09 |
-| CI | GitHub Actions `.github/workflows/ci.yml`, run **37924930042** on pull request #10 |
+| CI | GitHub Actions `.github/workflows/ci.yml`, run **37935872816** on pull request #10 |
 
 ---
 
@@ -493,7 +493,10 @@ $ cargo xtask check-style                                  # ok
 (`wgmesh-conformance` promotion, fleet, coordinator_udp) passed, 0 failed; the
 remaining targets are the stubs, and doc-tests are empty.
 
-CI runs the same five commands on a GitHub-hosted runner. The run for the head of this branch passed: run 37924930042, `fmt, clippy, test, checks` in 1m7s. (The only change since that run is these two sentences.)
+CI runs the same five commands on a GitHub-hosted runner, on two cores. The run
+for this branch passed: run 37935872816, `fmt, clippy, test, checks` in 1m37s --
+the conformance scenarios included. (The only change since that run is these two
+sentences.)
 
 ---
 
