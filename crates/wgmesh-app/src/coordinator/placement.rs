@@ -115,9 +115,8 @@ impl AssignPair<'_> {
             // merely that nobody has retired it: a relay that went quiet is the
             // case this whole path exists for, and keeping a pair on one would
             // leave it dead until the next sweep. The reading is the policy's,
-            // the same one the sweep moves pairs by.
+            // the same one the sweep moves pairs by and the choice places them by.
             let now = self.clock.now();
-            let stale_after = self.policy.stale_after();
             let still_up = self
                 .directory
                 .relay_by_id(current)
@@ -126,9 +125,7 @@ impl AssignPair<'_> {
                 .is_some_and(|relay| {
                     relay.state == RelayState::Active
                         && !relay.draining
-                        && relay
-                            .last_heartbeat_at
-                            .is_some_and(|seen| now.0.saturating_sub(seen.0) <= stale_after.0)
+                        && self.policy.is_fresh(relay.last_heartbeat_at, now)
                 });
             if still_up {
                 return Ok(Some(current));

@@ -448,7 +448,7 @@ default_auto_approve       = false
 max_devices_per_network    = 256
 join_rate_limit_per_minute = 30
 [relay]
-heartbeat_timeout_secs = 15
+heartbeat_timeout_secs = 5   # the window one heartbeat is given; three misses re-home
 reassign_after_misses  = 3
 keyset_ttl_secs        = 300
 [log]

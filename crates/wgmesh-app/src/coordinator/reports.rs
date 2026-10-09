@@ -1,6 +1,6 @@
 use wgmesh_core::{DeviceId, Millis, RelayId};
 use wgmesh_ports::Clock;
-use wgmesh_ports::coordinator::{DeviceState, Directory, Placement, Relay, RelayState, Reports};
+use wgmesh_ports::coordinator::{DeviceState, Directory, Placement, RelayState, Reports};
 
 use super::select_relay::SelectRelay;
 use super::types::{Heartbeat, Observation, PlacePolicy, RehomeReport, ReportError, TrafficSample};
@@ -126,7 +126,6 @@ impl IngestHeartbeat<'_> {
     /// A relay has no health column: staleness is a reading of
     /// `last_heartbeat_at`, so a relay that comes back needs nothing reset.
     pub async fn sweep(&self, now: Millis) -> Result<Vec<RehomeReport>, ReportError> {
-        let stale_after = self.policy.stale_after();
         let mut moved = Vec::new();
 
         for network in self
@@ -149,10 +148,11 @@ impl IngestHeartbeat<'_> {
                 //     pointed at a relay the pool no longer offers them a slot on.
                 //   * it is draining — it is leaving on purpose, and waiting out the
                 //     heartbeat timeout would hold the maintenance window open.
-                //   * it has gone quiet — the failure this whole step is about.
+                //   * it has gone quiet — the failure this whole step is about, and the
+                //     same reading the choice places pairs by.
                 let leaving = relay.state != RelayState::Active
                     || relay.draining
-                    || is_quiet(&relay, now, stale_after);
+                    || self.policy.is_quiet(relay.last_heartbeat_at, now);
                 if !leaving {
                     continue;
                 }
@@ -221,13 +221,6 @@ impl IngestHeartbeat<'_> {
             }
         }
         Ok(tenants)
-    }
-}
-
-fn is_quiet(relay: &Relay, now: Millis, stale_after: Millis) -> bool {
-    match relay.last_heartbeat_at {
-        Some(last) => now.0.saturating_sub(last.0) > stale_after.0,
-        None => true,
     }
 }
 

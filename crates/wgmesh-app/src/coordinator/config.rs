@@ -97,6 +97,11 @@ impl BuildConfig<'_> {
 
 /// This device's slot on every relay of its network, so a re-assignment needs
 /// no new round trip.
+///
+/// A slot is not gated on freshness, only on the relay being `Active`: it is a
+/// port the node holds open, not a path it is using, and dropping it while a
+/// relay is briefly quiet would cost exactly the round trip this list exists to
+/// avoid.
 pub(crate) async fn relay_slots(
     directory: &dyn Directory,
     placement: &dyn Placement,
@@ -133,16 +138,12 @@ pub(crate) async fn assigned_relay(
     let mut peer_relays: Vec<(DeviceId, RelayId)> = Vec::new();
     let mut live: Vec<RelayId> = Vec::new();
     let now = clock.now();
-    let stale_after = policy.stale_after();
 
     for relay in directory.relays_of(device.network_id).await? {
         if relay.state != RelayState::Active {
             continue;
         }
-        let fresh = !relay.draining
-            && relay
-                .last_heartbeat_at
-                .is_some_and(|seen| now.0.saturating_sub(seen.0) <= stale_after.0);
+        let fresh = !relay.draining && policy.is_fresh(relay.last_heartbeat_at, now);
         if fresh {
             live.push(relay.id);
         }

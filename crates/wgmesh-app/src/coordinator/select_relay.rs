@@ -15,8 +15,9 @@ pub struct RelayCandidate {
     pub rtt_a_ms: Option<u32>,
     pub rtt_b_ms: Option<u32>,
     pub region: Option<String>,
-    /// When the coordinator last heard from the relay.
-    pub last_seen: Millis,
+    /// When the coordinator last heard from the relay, or `None` if it never
+    /// has.
+    pub last_seen: Option<Millis>,
     /// The relay this pair is already assigned to.
     pub current: bool,
     /// Pairs the relay already carries.
@@ -27,8 +28,8 @@ pub struct RelayCandidate {
 }
 
 impl RelayCandidate {
-    fn is_fresh(&self, now: Millis, stale_after: Millis) -> bool {
-        now.0.saturating_sub(self.last_seen.0) <= stale_after.0
+    fn is_fresh(&self, now: Millis, policy: PlacePolicy) -> bool {
+        policy.is_fresh(self.last_seen, now)
     }
 
     fn rtt_sum(&self) -> Option<u32> {
@@ -46,19 +47,19 @@ impl RelayCandidate {
 /// relay both sides can reach with the lowest combined round-trip time, prefer
 /// a region this device is not already on, and spread the load.
 ///
-/// `stale_after` is the coordinator's own reading of how long a relay may be
-/// silent before it is gone — [`PlacePolicy::stale_after`]. It is an argument
-/// rather than a constant here so that the choice which places a pair and the
-/// sweep which re-homes one cannot disagree about which relays still exist: a
-/// pair must never be placed on a relay the sweep has already declared gone.
+/// A relay the policy no longer calls fresh is not a candidate. The policy is an
+/// argument rather than a constant here so that the choice which places a pair
+/// and the sweep which re-homes one cannot disagree about which relays still
+/// exist: a pair must never be placed on a relay the sweep has already declared
+/// gone.
 pub fn select_relay(
     candidates: &[RelayCandidate],
     now: Millis,
-    stale_after: Millis,
+    policy: PlacePolicy,
 ) -> Option<RelayId> {
     let usable: Vec<&RelayCandidate> = candidates
         .iter()
-        .filter(|candidate| candidate.is_fresh(now, stale_after))
+        .filter(|candidate| candidate.is_fresh(now, policy))
         .collect();
 
     if let Some(sticky) = usable.iter().find(|candidate| candidate.current) {
@@ -95,11 +96,7 @@ impl SelectRelay<'_> {
         exclude: Option<RelayId>,
     ) -> Result<Option<RelayId>, PlaceError> {
         let candidates = self.candidates(device_a, device_b, exclude).await?;
-        Ok(select_relay(
-            &candidates,
-            self.clock.now(),
-            self.policy.stale_after(),
-        ))
+        Ok(select_relay(&candidates, self.clock.now(), self.policy))
     }
 
     /// Every relay of the pair's network as a candidate, minus `exclude`.
@@ -157,7 +154,7 @@ impl SelectRelay<'_> {
                 rtt_a_ms: None,
                 rtt_b_ms: None,
                 region: relay.region.clone(),
-                last_seen: relay.last_heartbeat_at.unwrap_or(Millis::ZERO),
+                last_seen: relay.last_heartbeat_at,
                 current: current == Some(relay.id),
                 load: pairs.len() as u32,
                 region_already_used: false,

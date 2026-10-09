@@ -59,18 +59,36 @@ pub struct PlacePolicy {
 impl PlacePolicy {
     /// How stale a relay's last heartbeat may be before the coordinator stops
     /// treating it as a place a pair may be.
-    ///
-    /// One reading, asked by everything that has to answer "is this relay still
-    /// there?": the sweep that moves pairs off one that has gone quiet, the
-    /// choice that places a new pair, and the sticky rule that keeps a working
-    /// one where it is. Two answers would let a pair be re-homed onto a relay
-    /// the sweep already calls gone.
     pub const fn stale_after(self) -> Millis {
         Millis::from_millis(
             self.heartbeat_timeout
                 .0
                 .saturating_mul(self.reassign_after_misses as u64),
         )
+    }
+
+    /// Whether the coordinator still counts a relay as there, at `now`.
+    ///
+    /// The one reading of a relay's health, asked by everything that has to
+    /// answer that question: the sweep that moves pairs off one that has gone
+    /// quiet, the choice that places a new pair, the sticky rule that keeps a
+    /// working one where it is, and the fallback relay a device's config names.
+    /// A second answer would let a pair be re-homed onto a relay the sweep
+    /// already calls gone.
+    ///
+    /// A relay that has never reported is not there: there is nothing to have
+    /// heard from.
+    pub const fn is_fresh(self, last_seen: Option<Millis>, now: Millis) -> bool {
+        match last_seen {
+            Some(last) => now.0.saturating_sub(last.0) <= self.stale_after().0,
+            None => false,
+        }
+    }
+
+    /// The same reading the other way round, so no relay can be both fresh and
+    /// quiet, or neither.
+    pub const fn is_quiet(self, last_seen: Option<Millis>, now: Millis) -> bool {
+        !self.is_fresh(last_seen, now)
     }
 }
 
