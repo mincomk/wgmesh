@@ -489,9 +489,10 @@ $ cargo xtask check-style                                  # ok
 
 `cargo test --workspace --locked` reports, target by target: 27 (`wgmesh-core`) +
 41 (`wgmesh-config`) + 29 (`wgmesh-secrets`) + 23 and 2 ignored (`wgmesh-state`)
-+ 6 (`wgmesh-conformance` lib) + 10 (`wgmesh-app` startup) + 6 + 1 + 1
++ 17 (`wgmesh-proto`) + 11 (`wgmesh-coordinator`'s own integration test) + 10
+(`wgmesh-app` startup) + 6 (`wgmesh-conformance` lib) + 6 + 1 + 1
 (`wgmesh-conformance` promotion, fleet, coordinator_udp) passed, 0 failed; the
-remaining targets are the stubs, and doc-tests are empty.
+crates that are still stubs contribute none, and doc-tests are empty.
 
 CI runs the same five commands on a GitHub-hosted runner, on two cores. The run
 for this branch passed: run 37935872816, `fmt, clippy, test, checks` in 1m37s --
