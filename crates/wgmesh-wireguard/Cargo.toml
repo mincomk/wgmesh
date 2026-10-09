@@ -12,3 +12,9 @@ workspace = true
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
 wgmesh-ports = { path = "../wgmesh-ports" }
+# `rtnetlink` hands its result sets back as `impl Stream` and re-exports no way
+# to drive one, so the adapter borrows `StreamExt` from `futures-util`.
+futures-util = "0.3"
+nl-wireguard = "0.3"
+rtnetlink = "0.23"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time"] }
