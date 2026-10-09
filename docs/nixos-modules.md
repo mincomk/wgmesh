@@ -265,6 +265,11 @@ $ nix build .#checks.x86_64-linux.forwarding
 $ nix flake check                     # also runs the dependency check
 ```
 
+`deps` needs nothing but a Nix store; the three VM tests need `/dev/kvm`. The
+flake tracks `github:NixOS/nixpkgs/nixos-unstable` and the repository does not
+commit a `flake.lock`, so the first run fetches whatever the channel points at
+that day -- run `nix flake lock` once and commit the lock file to pin it.
+
 | Check | What it stands up | What it asserts |
 |---|---|---|
 | `deps` | nothing | `cargo xtask check-deps` over the source tree. |

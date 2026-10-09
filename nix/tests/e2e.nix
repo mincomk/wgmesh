@@ -39,21 +39,27 @@ let
   spki = lib.removeSuffix "\n" (builtins.readFile "${cert}/spki");
 
   # Shared configuration of the two agent nodes. The join token is written into
-  # place by the test script, so the unit is deliberately not started at boot.
+  # place by the test script and reaches the unit as a systemd credential, so the
+  # unit is deliberately not started at boot.
   agentNode =
     { lib, ... }:
     {
       imports = [ self.nixosModules.agent ];
 
-      environment.systemPackages = with pkgs; [
+      # The test script runs `wgmesh` from the node's own shell, so the package
+      # has to be on PATH; the unit's ExecStart uses the store path directly.
+      environment.systemPackages = [ wgmesh ] ++ (with pkgs; [
         jq
         wireguard-tools
-      ];
+      ]);
 
       services.wgmesh.agent = {
         enable = true;
         package = wgmesh;
         openFirewall = true;
+        # Written by the script just before it starts the unit; the module hands
+        # it to the agent as the `enrollment-token` credential.
+        enrollmentTokenFile = "/etc/wgmesh/token";
         settings = {
           interface.listen_port = 51820;
           coordinator = {
@@ -86,7 +92,9 @@ in
         self.nixosModules.relay
       ];
 
-      environment.systemPackages = with pkgs; [ jq ];
+      # `wgmeshd` is driven from this shell (`bootstrap`, `token create`), and
+      # the relay's own token is minted into the same file the agent uses.
+      environment.systemPackages = [ wgmesh ] ++ (with pkgs; [ jq ]);
 
       services.wgmesh.coordinator = {
         enable = true;
@@ -98,6 +106,7 @@ in
         enable = true;
         package = wgmesh;
         openFirewall = true;
+        enrollmentTokenFile = "/etc/wgmesh/token";
         settings = {
           relay.port_range = [
             51820

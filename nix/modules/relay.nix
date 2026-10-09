@@ -194,7 +194,9 @@ in
         ];
 
         # The relay forwards datagrams it receives; it never configures the
-        # kernel, so it needs no capabilities at all.
+        # kernel, so it needs no capabilities at all. The empty string is what an
+        # explicitly empty capability set looks like in a unit file -- an empty
+        # list would be left out of the unit and leave the default in place.
         AmbientCapabilities = [ "" ];
         CapabilityBoundingSet = [ "" ];
         RestrictAddressFamilies = [

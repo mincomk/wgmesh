@@ -38,12 +38,15 @@ let
     {
       imports = [ self.nixosModules.relay ];
 
-      environment.systemPackages = with pkgs; [ jq ];
+      # The script drives this node from its own shell (jq, ss, systemctl), so
+      # the package has to be on PATH; the unit's ExecStart uses the store path.
+      environment.systemPackages = [ wgmesh ] ++ (with pkgs; [ jq ]);
 
       services.wgmesh.relay = {
         enable = true;
         package = wgmesh;
         openFirewall = true;
+        enrollmentTokenFile = "/etc/wgmesh/token";
         settings = {
           relay.port_range = [
             51820
@@ -68,7 +71,9 @@ in
     router = {
       imports = [ self.nixosModules.coordinator ];
 
-      environment.systemPackages = with pkgs; [ jq ];
+      # `wgmeshd` is driven from this shell: the first network and every join
+      # token are minted here.
+      environment.systemPackages = [ wgmesh ] ++ (with pkgs; [ jq ]);
 
       services.wgmesh.coordinator = {
         enable = true;
@@ -92,12 +97,13 @@ in
     nodeA = {
       imports = [ self.nixosModules.agent ];
 
-      environment.systemPackages = with pkgs; [ jq ];
+      environment.systemPackages = [ wgmesh ] ++ (with pkgs; [ jq ]);
 
       services.wgmesh.agent = {
         enable = true;
         package = wgmesh;
         openFirewall = true;
+        enrollmentTokenFile = "/etc/wgmesh/token";
         settings = {
           interface.listen_port = 51820;
           coordinator = {

@@ -243,6 +243,19 @@ in
         '';
       }
       {
+        # The rule the module adds is written as an nftables set, and an empty
+        # set -- `iifname { }` -- is a syntax error that rejects the whole
+        # ruleset when nftables loads it.
+        assertion =
+          !(cfg.forwarding.enable && cfg.forwarding.firewall == "manage")
+          || cfg.forwarding.trustedInterfaces != [ ];
+        message = ''
+          services.wgmesh.agent: forwarding.firewall = "manage" needs at least one
+          interface in forwarding.trustedInterfaces: the rule nftables gets is a set,
+          and an empty set is a syntax error.
+        '';
+      }
+      {
         assertion = lib.hasPrefix "/var/lib/" stateDir;
         message = "services.wgmesh.agent: stateDir must be below /var/lib (it is the name systemd's StateDirectory= provides): ${stateDir}";
       }
