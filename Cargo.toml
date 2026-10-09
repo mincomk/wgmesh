@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/wgmesh-app",
+    "crates/wgmesh-cli",
+    "crates/wgmesh-client",
+    "crates/wgmesh-config",
+    "crates/wgmesh-coordinator",
+    "crates/wgmesh-core",
+    "crates/wgmesh-ports",
+    "crates/wgmesh-proto",
+    "crates/wgmesh-relay",
+    "crates/wgmesh-secrets",
+    "crates/wgmesh-state",
+    "crates/wgmesh-wireguard",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "allow"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+todo = "warn"
+dbg_macro = "deny"
+print_stdout = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

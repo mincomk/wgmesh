@@ -1,0 +1,47 @@
+name: CI
+
+# `cargo deny check licenses bans` joins this workflow once the workspace has a
+# license and bans configuration to check against; until then there is nothing for
+# it to read.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: fmt, clippy, test, checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - name: Dependency rules
+        run: cargo xtask check-deps
+
+      - name: Style rules
+        run: cargo xtask check-style

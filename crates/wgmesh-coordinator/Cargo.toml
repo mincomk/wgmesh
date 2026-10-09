@@ -1,0 +1,23 @@
+[package]
+name = "wgmesh-coordinator"
+description = "Coordinator application: enrollment, configuration, relay assignment, observation. Ships the wgmeshd binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+autobins = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "wgmeshd"
+path = "src/main.rs"
+
+[dependencies]
+wgmesh-core = { path = "../wgmesh-core" }
+wgmesh-app = { path = "../wgmesh-app" }
+wgmesh-proto = { path = "../wgmesh-proto" }
+wgmesh-config = { path = "../wgmesh-config" }
+wgmesh-state = { path = "../wgmesh-state" }
+wgmesh-secrets = { path = "../wgmesh-secrets" }

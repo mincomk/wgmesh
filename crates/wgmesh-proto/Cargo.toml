@@ -1,0 +1,13 @@
+[package]
+name = "wgmesh-proto"
+description = "Wire types of the coordinator API, plus signing canonicalization."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wgmesh-core = { path = "../wgmesh-core" }

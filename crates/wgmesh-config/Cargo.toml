@@ -1,0 +1,13 @@
+[package]
+name = "wgmesh-config"
+description = "Configuration loading, defaults and validation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wgmesh-core = { path = "../wgmesh-core" }
