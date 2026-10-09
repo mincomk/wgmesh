@@ -1,7 +1,8 @@
 //! The daemon: the lock, the startup sequence, and the loop that keeps the mesh converged.
 
 use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -17,8 +18,16 @@ use crate::error::CliError;
 /// Two agents programming one interface is not a crash: the kernel would accept both, and the
 /// result would be a peer table that flickers between two opinions. The lock is what makes that
 /// impossible.
+///
+/// It is a file that records the pid of the process holding it, created with `create_new` so the
+/// kernel decides who wins a race and nobody has to. A file left behind by a process that is gone
+/// — a `SIGKILL`, a power cut — is taken over, which is the reason the holder is written down at
+/// all. Liveness is read from `/proc`, so the lock is Linux's, as the rest of the agent is.
+///
+/// One caveat, stated because it is the classic pidfile one: a pid that has been reused by an
+/// unrelated process looks like a live holder, and this device would refuse to start until a
+/// person removed the file.
 pub struct Lock {
-    file: File,
     path: PathBuf,
 }
 
@@ -28,23 +37,38 @@ impl Lock {
         std::fs::create_dir_all(dir)
             .map_err(|error| CliError::runtime(format!("{}: {error}", dir.display())))?;
         let path = dir.join(name);
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(|error| CliError::runtime(format!("{}: {error}", path.display())))?;
-        match file.try_lock() {
-            Ok(()) => Ok(Self { file, path }),
-            Err(std::fs::TryLockError::WouldBlock) => Err(CliError::runtime(format!(
-                "another wgmesh agent is already running on this host ({} is locked)",
-                path.display()
-            ))),
-            Err(std::fs::TryLockError::Error(error)) => {
-                Err(CliError::runtime(format!("{}: {error}", path.display())))
+        // Twice: the first attempt, and the one that may follow clearing a lock left behind by a
+        // process that is gone.
+        for _ in 0..2 {
+            match OpenOptions::new().create_new(true).write(true).open(&path) {
+                Ok(mut file) => {
+                    let _ = writeln!(file, "{}", std::process::id());
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    match holder(&path) {
+                        Some(pid) if is_running(pid) => {
+                            return Err(CliError::runtime(format!(
+                                "another wgmesh agent is already running on this host (pid {pid}, {} \
+                             is locked)",
+                                path.display()
+                            )));
+                        }
+                        // Nobody holds it: a run that died left the file behind.
+                        _ => {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Err(CliError::runtime(format!("{}: {error}", path.display())));
+                }
             }
         }
+        Err(CliError::runtime(format!(
+            "{}: could not take the lock after clearing one left behind",
+            path.display()
+        )))
     }
 
     /// The lock file.
@@ -55,8 +79,18 @@ impl Lock {
 
 impl Drop for Lock {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        let _ = std::fs::remove_file(&self.path);
     }
+}
+
+/// The process a lock file names, when it names one.
+fn holder(path: &Path) -> Option<u32> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+/// Whether a process is still there. `/proc`, because this agent runs on Linux.
+fn is_running(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// What a run did before it settled into the loop.

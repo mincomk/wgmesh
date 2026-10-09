@@ -4,7 +4,7 @@
 //! call into the container, and every fact they print comes from the configuration, the state file
 //! or the device.
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use wgmesh_config::Layers;
 use wgmesh_core::RouteChange;
@@ -858,6 +858,6 @@ pub fn key_text(key: &wgmesh_core::PublicKey) -> String {
 }
 
 /// A path, as a person would type it.
-pub fn display(path: &PathBuf) -> String {
+pub fn display(path: &Path) -> String {
     path.display().to_string()
 }

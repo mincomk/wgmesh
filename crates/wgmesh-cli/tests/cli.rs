@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! The output contract of the `wgmesh` binary, held still.
 //!
 //! These assertions are the contract in `docs/cli-contract.md`: if one of them changes, the
@@ -463,6 +465,74 @@ fn the_pipeline_enrols_runs_and_reports_each_peer() {
     assert_eq!(peer["path"], "direct", "{value}");
     assert_eq!(peer["endpoint"], "203.0.113.9:41287", "{value}");
     assert!(peer["handshake_age_secs"].is_number(), "{value}");
+}
+
+/// One agent per host: the second refuses to start rather than program the same interface, and a
+/// lock left behind by a process that is gone does not keep the next one out.
+#[test]
+fn a_second_agent_refuses_to_start_and_a_dead_agents_lock_is_taken_over() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = minimal_config(dir.path());
+    write_world(dir.path());
+    let state = state_dir(dir.path());
+    let lock = state.join("run").join("agent.lock");
+
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "join", "--token", "tok"])
+        .assert()
+        .success();
+
+    let mut child = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "run"])
+        .spawn()
+        .expect("the agent starts");
+    wait_for(&lock, &|_| true, "the running agent to take the lock");
+    let holder = fs::read_to_string(&lock).expect("the lock file");
+
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already running"));
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let mut second = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "run"])
+        .spawn()
+        .expect("the next agent starts");
+    wait_for(
+        &lock,
+        &|text| text != holder,
+        "the next agent to take the lock over",
+    );
+    let _ = second.kill();
+    let _ = second.wait();
+}
+
+/// Wait until the lock file holds what `done` asks for, or give up.
+fn wait_for(lock: &Path, done: &dyn Fn(&str) -> bool, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        if let Ok(text) = fs::read_to_string(lock) {
+            if done(&text) {
+                return;
+            }
+            last = text;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("gave up waiting for {what} (last contents: {last:?})");
 }
 
 fn field(text: &str, name: &str) -> String {
