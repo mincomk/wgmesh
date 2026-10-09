@@ -675,7 +675,8 @@ fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
             ),
         ),
     };
-    let report = crate::doctor::run(&checked, snapshot.as_ref(), &crate::doctor::ProcSysctl);
+    let sysctl = crate::doctor::ProcSysctl::rooted(&args.proc_root);
+    let report = crate::doctor::run(&checked, snapshot.as_ref(), &sysctl);
     for finding in &report.findings {
         checks.push(CheckView {
             name: finding.code.as_str().to_string(),
