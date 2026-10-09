@@ -1,33 +1,29 @@
 // The style rules of the blueprint, section 16. Two greps, in Rust, so that they
 // run everywhere the checks run:
 //
-//   1. No file-level comment (`//!`) in any Rust source under `crates/` or `xtask/`.
-//   2. No Hangul in any Rust source under those directories, comments included.
+//   1. No file-level comment in any Rust source of the workspace. The line form,
+//      the block form and the crate-level doc attribute all declare the same
+//      thing, so all three are out; the rule is about the doc, not the spelling.
+//   2. No Hangul in any Rust source of the workspace, comments included.
+//
+// The walk starts at the workspace root, so a source file cannot escape the rules
+// by sitting outside `crates/`. `target/` and dot-directories are skipped, and
+// symlinks are not followed: a link inside the tree could otherwise pull in a tree
+// of someone else's sources.
 
 use std::fs;
-use std::path::Path;
-
-// The directories the two greps cover.
-const SCANNED: &[&str] = &["crates", "xtask"];
+use std::path::{Path, PathBuf};
 
 const HANGUL_FIRST: char = '\u{AC00}';
 const HANGUL_LAST: char = '\u{D7A3}';
 
+// Directory names never walked.
+const SKIPPED: &[&str] = &["target"];
+
 pub fn check() -> Result<(), Vec<String>> {
     let root = crate::workspace_root().map_err(|error| vec![error])?;
     let mut errors = Vec::new();
-
-    for directory in SCANNED {
-        let path = root.join(directory);
-        if !path.is_dir() {
-            errors.push(format!(
-                "{directory}: is not a directory of the workspace root {}",
-                root.display()
-            ));
-            continue;
-        }
-        walk(&path, &root, &mut errors);
-    }
+    walk(&root, &root, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -49,8 +45,19 @@ fn walk(directory: &Path, root: &Path, errors: &mut Vec<String>) {
     };
 
     for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            continue;
+        }
+        let path: PathBuf = entry.path();
+        if kind.is_dir() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || SKIPPED.contains(&name.as_ref()) {
+                continue;
+            }
             walk(&path, root, errors);
         } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
             scan(&path, root, errors);
@@ -71,9 +78,9 @@ fn scan(path: &Path, root: &Path, errors: &mut Vec<String>) {
     for (index, line) in text.lines().enumerate() {
         let number = index + 1;
 
-        if line.starts_with("//!") {
+        if declares_the_document(line) {
             errors.push(format!(
-                "{file}:{number}: a file-level comment (`//!`) is forbidden"
+                "{file}:{number}: a file-level comment is forbidden, in any of its three spellings"
             ));
         }
 
@@ -87,6 +94,14 @@ fn scan(path: &Path, root: &Path, errors: &mut Vec<String>) {
             ));
         }
     }
+}
+
+// `//!` and `/*!` are the line and block form of the same declaration, and
+// `#![doc = ...]` is the attribute form. Leading whitespace is irrelevant, and so
+// is a stray carriage return.
+fn declares_the_document(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("//!") || trimmed.starts_with("/*!") || trimmed.starts_with("#![doc")
 }
 
 fn shown(path: &Path, root: &Path) -> String {

@@ -1,1 +1,5 @@
 /target
+
+# Nothing that holds a secret or a half-written file belongs in this repository.
+*.key
+*.tmp

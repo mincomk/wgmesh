@@ -10,8 +10,17 @@
 //      name. Development dependencies are exempt: they do not ship, and property
 //      tests legitimately borrow crates the product does not use.
 //   3. `wgmesh-core` is pure. No crate whose name mentions any of the tokens in
-//      `FORBIDDEN_IN_CORE` may appear anywhere in its transitive tree, at any
-//      depth. That is what makes "pure core" a fact rather than a slogan.
+//      `FORBIDDEN_IN_CORE` may appear anywhere in its transitive shipping tree, at
+//      any depth. That is what makes "pure core" a fact rather than a slogan.
+//
+// Two boundaries, stated here because they are deliberate and not obvious. The
+// table is an upper bound: it forbids an edge section 1.1 does not allow, and it
+// does not require the edges section 1.1's diagram draws, so dropping a wired edge
+// is a change no check will catch. And both rule 1 and rule 3 look at what ships:
+// a development dependency is exempt from the table, and the purity walk follows
+// only normal edges, so `wgmesh-core` may take `tokio` in `[dev-dependencies]`
+// without failing. If either boundary is wrong, the intent belongs in this file
+// rather than in a reviewer's memory.
 
 use std::collections::{BTreeMap, BTreeSet};
 

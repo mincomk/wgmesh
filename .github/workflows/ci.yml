@@ -1,8 +1,10 @@
 name: CI
 
-# `cargo deny check licenses bans` joins this workflow once the workspace has a
-# license and bans configuration to check against; until then there is nothing for
-# it to read.
+# Two of section 16's CI steps are deliberately not here yet. `cargo deny check
+# licenses bans` has no license or bans configuration to read until the workspace
+# has one. The two `nix build .#checks.x86_64-linux.*` steps have nothing to build
+# until `nix/` exists. Both join this workflow with the work that gives them
+# something to check.
 
 on:
   push:

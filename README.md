@@ -41,7 +41,7 @@ Two checks encode rules that would otherwise live in a reviewer's memory. CI run
 exactly these commands, so a local run and a CI run are the same run.
 
 ```console
-$ cargo xtask check-deps     # the dependency table below
+$ cargo xtask check-deps     # the dependency table of the blueprint, section 1.1
 $ cargo xtask check-style    # no file-level comments, no Hangul in Rust sources
 ```
 
