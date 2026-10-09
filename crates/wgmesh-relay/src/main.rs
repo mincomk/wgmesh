@@ -6,13 +6,12 @@
 // binds the UDP slot ports. Pulling it out of the agent later would cost far more than
 // starting here.
 //
-// What this build can and cannot do is stated plainly rather than faked:
-//   * `enroll` generates the relay key and reaches for the coordinator. With no
-//     coordinator it fails and says why. With one it still stops short of registering,
-//     because the enrollment exchange is a signed HTTPS request and `wgmesh-client` is
-//     not written yet.
-//   * `run` serves an assignment handed to it as a file, or says honestly that it has
-//     no assignment source and serves nothing.
+// What this build does, and does not:
+//   * `enroll` generates the relay key, registers with the coordinator over the pinned HTTPS
+//     connection, remembers the id it is given, and reads `GET /v1/relay/assignment`.
+//   * `run` fetches that assignment from the coordinator on startup and serves it. An assignment
+//     is read once and not re-read: a relay whose pairs move is restarted. `--assignment-file`
+//     serves one from a file instead, for a host that cannot reach the coordinator at all.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -278,10 +277,19 @@ fn parse_config(text: &str) -> Result<ParsedConfig, String> {
                     }
                 };
             }
-            ("", "rate_limit_pps_per_slot") | ("relay", "rate_limit_pps_per_slot") => {
+            // The ceiling is written two ways in this project and both are real: the
+            // blueprint's `[limits]` table, which `wgmesh-config` parses
+            // (`RelaySettings.limits`), and this binary's older `rate_limit_*` keys.
+            // Accepting only the second is how a ceiling gets silently ignored — the
+            // catch-all below drops unknown keys without a word.
+            ("", "rate_limit_pps_per_slot")
+            | ("relay", "rate_limit_pps_per_slot")
+            | ("limits", "pps_per_slot") => {
                 relay.pps_per_slot = parse_number(value, number)?;
             }
-            ("", "rate_limit_mbit_per_slot") | ("relay", "rate_limit_mbit_per_slot") => {
+            ("", "rate_limit_mbit_per_slot")
+            | ("relay", "rate_limit_mbit_per_slot")
+            | ("limits", "mbit_per_slot") => {
                 relay.mbit_per_slot = parse_number(value, number)?;
             }
             ("state", "dir") | ("", "state_dir") => {
@@ -1083,5 +1091,32 @@ mod tests {
         // Sixty-four bytes that are not sixty-four characters: a slice at a boundary like that
         // would panic, so the reader has to refuse it without one.
         assert!(parse_spki(&"é".repeat(32)).is_err());
+    }
+
+    /// The ceiling in the file the documentation specifies has to reach the engine.
+    ///
+    /// It did not: this parser knew only `rate_limit_pps_per_slot`, and its catch-all
+    /// drops unknown keys without a word, so `[limits] pps_per_slot = 2` left the slot
+    /// ceiling at its default. Both spellings are accepted now, and this is the test
+    /// that would have caught the difference.
+    #[test]
+    fn the_documented_limits_table_reaches_the_engine_config() {
+        let parsed = parse_config(
+            "[relay]\nlisten = \"127.0.0.1\"\n\n[limits]\npps_per_slot = 2\nmbit_per_slot = 3\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.relay.pps_per_slot, 2);
+        assert_eq!(parsed.relay.mbit_per_slot, 3);
+    }
+
+    /// The older spelling still works: a configuration written before this change must
+    /// keep meaning what it meant.
+    #[test]
+    fn the_older_rate_limit_keys_still_work() {
+        let parsed =
+            parse_config("rate_limit_pps_per_slot = 7\n[relay]\nrate_limit_mbit_per_slot = 9\n")
+                .unwrap();
+        assert_eq!(parsed.relay.pps_per_slot, 7);
+        assert_eq!(parsed.relay.mbit_per_slot, 9);
     }
 }
