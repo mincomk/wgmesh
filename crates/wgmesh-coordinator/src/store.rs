@@ -74,6 +74,20 @@ pub struct NewDevice {
     pub created_at: i64,
 }
 
+// Everything a freshly minted join token needs to be recorded. Borrowed strings
+// because the caller keeps ownership: the token is the caller's to hand out.
+#[derive(Debug, Clone, Copy)]
+pub struct NewJoinToken<'a> {
+    pub network_id: i64,
+    pub kind: &'a str,
+    pub token: &'a str,
+    pub max_uses: i64,
+    pub auto_approve: bool,
+    pub expires_at: i64,
+    pub created_by: &'a str,
+    pub now: i64,
+}
+
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
@@ -205,30 +219,20 @@ impl Store {
 
     // The token itself never reaches the database: only its SHA-256 does, so a
     // dump of this table cannot be turned back into a usable token.
-    pub async fn create_join_token(
-        &self,
-        network_id: i64,
-        kind: &str,
-        token: &str,
-        max_uses: i64,
-        auto_approve: bool,
-        expires_at: i64,
-        created_by: &str,
-        now: i64,
-    ) -> StoreResult<()> {
-        let hash = wgmesh_proto::signed::sha256_hex(token.as_bytes());
+    pub async fn create_join_token(&self, token: &NewJoinToken<'_>) -> StoreResult<()> {
+        let hash = wgmesh_proto::signed::sha256_hex(token.token.as_bytes());
         sqlx::query(
             "INSERT INTO join_tokens (network_id, kind, token_hash, max_uses, auto_approve, expires_at, created_by, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(network_id)
-        .bind(kind)
+        .bind(token.network_id)
+        .bind(token.kind)
         .bind(hash.as_bytes().to_vec())
-        .bind(max_uses)
-        .bind(i64::from(auto_approve))
-        .bind(expires_at)
-        .bind(created_by)
-        .bind(now)
+        .bind(token.max_uses)
+        .bind(i64::from(token.auto_approve))
+        .bind(token.expires_at)
+        .bind(token.created_by)
+        .bind(token.now)
         .execute(&self.pool)
         .await?;
         Ok(())

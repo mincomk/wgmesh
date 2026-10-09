@@ -7,4 +7,4 @@ pub use auth::{
     authenticate_signed,
 };
 pub use http::{ADMIN_HEADER, AdminAuth, ApiError, AppState, Clock, SystemClock, router};
-pub use store::{AuditEntry, DeviceRow, NewDevice, Store, StoreError, StoreResult};
+pub use store::{AuditEntry, DeviceRow, NewDevice, NewJoinToken, Store, StoreError, StoreResult};

@@ -9,7 +9,7 @@ use axum::http::{Request, StatusCode};
 use serde_json::Value;
 use tower::ServiceExt;
 
-use wgmesh_coordinator::{ADMIN_HEADER, AdminAuth, AppState, Clock, Store, router};
+use wgmesh_coordinator::{ADMIN_HEADER, AdminAuth, AppState, Clock, NewJoinToken, Store, router};
 use wgmesh_core::{Allowed, Change, DeviceId, PeerSpec, PublicKey, diff};
 use wgmesh_ports::{InterfaceSpec, WireGuard};
 use wgmesh_wireguard::testing::FakeWireGuard;
@@ -58,16 +58,16 @@ async fn join(harness: &Harness, name: &str, seed: u8) -> Device {
     let token = format!("WGMESH-REVOCATION-{name}");
     harness
         .store
-        .create_join_token(
-            harness.network,
-            "device",
-            &token,
-            1,
-            true,
-            2_000_000,
-            "admin",
-            1_000_000,
-        )
+        .create_join_token(&NewJoinToken {
+            network_id: harness.network,
+            kind: "device",
+            token: &token,
+            max_uses: 1,
+            auto_approve: true,
+            expires_at: 2_000_000,
+            created_by: "admin",
+            now: 1_000_000,
+        })
         .await
         .unwrap();
     let secret = [seed; 32];
