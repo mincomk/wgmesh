@@ -73,7 +73,7 @@ known, `yes`/`no` for a boolean.
 | `state reset --yes` | — | `state cleared at …; the next run re-enrols with the same keys` |
 | `trust show [--json]` | `configured`, `pinned`, `matches` | `configured`/`pinned`/`match yes\|no` |
 | `trust rotate --yes` | — | the pin, now the configuration's |
-| `doctor [--json]` | `checks[]{name,status,detail}` | `<status> <name> <detail>` |
+| `doctor [--json] [--snapshot PATH] [--proc-root PATH] [--nat-probe ADDR]…` | `checks[]{name,status,detail}` (+ `nat{}` with `--nat-probe`) | `<status> <name> <detail>` |
 | `pin <url> [--json]` | `url`, `pin`, `error` | — |
 
 ### `peer` objects
@@ -100,11 +100,28 @@ device can report. `status --json` prefers the device's own answer for both.
 
 ### `doctor`'s checks
 
-M0's `doctor` reuses the configuration validation rather than duplicating it, and reports its
-checks in a fixed order: `configuration`, `backend`, `state`, `wireguard key`, `forwarding`, and —
-when `peers.exit_peer` names one — a sixth, `exit peer`. Each carries `status` `ok`, `warn` or
-`fail`. A check that `fail`s exits `1` (`doctor found problems`); `warn` does not. NAT diagnosis
-and a routing check are M2's.
+`doctor` reports four checks of its own first — `configuration`, `backend`, `state` and
+`wireguard key` — then one check per routing-and-forwarding finding from the check library in
+`wgmesh-core`: the finding's code is the `name` (`routes-needed-but-table-off`,
+`catch-all-on-multiple-peers`, …), its severity is the `status` (`error` → `fail`, `warning` →
+`warn`, `info` → `ok`), and `"<summary> — <remedy>"` is the `detail`. Last come the `routing` notes,
+at `status: warn`.
+
+Half of those checks need the coordinator's answer — which peers exist, and which bands they
+advertise — which arrives in the body of `GET /v1/config`. `--snapshot PATH` supplies it. Without
+one they do not run, and a note says so rather than passing silently; a snapshot that cannot be
+read is a note too. A check that `fail`s exits `1` (`doctor found problems`); `warn` does not.
+
+The kernel's own answers — `net.ipv4.ip_forward` and its IPv6 sibling — are read from `/proc/sys`
+unless `--proc-root PATH` says otherwise, which is how a test, or a diagnosis of an image, answers
+for a machine that is not this one.
+
+`--nat-probe ADDR`, given once or twice, runs the NAT diagnosis: each address is asked what source
+it saw us come from, and the ports the probers report are what separates a cone NAT from a
+symmetric one. A second prober at a *different* address is what makes the two decidable; with one,
+the mapping is known and the filtering is not, and the report says which. It is printed as its own
+`nat` section (a JSON object under `--json`), and a probe that gets no answer fails the command
+rather than guessing.
 
 The peer-dependent checks need the coordinator's answer — which peers exist, and which bands each
 one advertises — and `doctor` fetches it itself with `GET /v1/config`: the pin comes from

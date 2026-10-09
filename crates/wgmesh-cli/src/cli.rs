@@ -67,6 +67,13 @@ pub struct DoctorArgs {
     /// tree is how a test, or a diagnosis of an image, answers for a machine that is not this one.
     #[arg(long, value_name = "PATH", default_value = "/proc/sys")]
     pub proc_root: std::path::PathBuf,
+
+    /// A prober that will report the source address it sees us come from — the mapping probe.
+    /// Give a second one at a *different* address and the two ports together say whether this
+    /// node's NAT is a cone or symmetric. The prober answers `WGMP1 M` with `WGMP1 <addr>`, and
+    /// `WGMP1 F` by sending three datagrams (see `natprobe::FILTER_KINDS`).
+    #[arg(long = "nat-probe", value_name = "ADDR")]
+    pub nat_probe: Vec<std::net::SocketAddr>,
 }
 
 #[derive(Debug, Args)]

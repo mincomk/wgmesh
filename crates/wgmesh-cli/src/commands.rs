@@ -680,6 +680,23 @@ async fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
     };
     let sysctl = crate::doctor::ProcSysctl::rooted(&args.proc_root);
     let report = crate::doctor::run(&checked, snapshot.as_ref(), &sysctl);
+
+    // The NAT diagnosis is a probe, not a read: it opens a socket, asks each prober what it sees,
+    // and asks one of them to probe back. With no `--nat-probe` there is nothing to ask, and the
+    // report says so rather than guessing.
+    let nat = if args.nat_probe.is_empty() {
+        None
+    } else {
+        match crate::natprobe::probe(&args.nat_probe) {
+            Ok(probe) => Some(probe),
+            Err(error) => {
+                return Err(CliError::runtime(format!(
+                    "the NAT probe could not complete: {error} — the addresses given must be \
+                     probers, not STUN servers"
+                )));
+            }
+        }
+    };
     for finding in &report.findings {
         checks.push(CheckView {
             name: finding.code.as_str().to_string(),
@@ -705,9 +722,21 @@ async fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
         checks,
     };
     if args.json {
-        println!("{}", output::json(&view));
+        let mut document = serde_json::to_value(&view).unwrap_or(serde_json::Value::Null);
+        if let Some(nat) = &nat {
+            document["nat"] = crate::natprobe::as_json(nat);
+        }
+        println!("{}", output::json(&document));
     } else {
         print!("{}", view.human());
+        if let Some(nat) = &nat {
+            print!("{}", crate::natprobe::render(nat));
+        } else {
+            println!(
+                "nat: not probed — pass --nat-probe <address> (twice, for two addresses) to \
+                 classify this node's NAT"
+            );
+        }
     }
     if view.failed() {
         return Err(CliError::runtime("doctor found problems"));

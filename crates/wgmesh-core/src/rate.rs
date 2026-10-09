@@ -132,7 +132,7 @@ impl<K: Eq + Hash + Copy> Metered<K> {
                 decision
             }
         };
-        self.prune(now_ms);
+        self.prune(now_ms, key);
         decision
     }
 
@@ -148,7 +148,7 @@ impl<K: Eq + Hash + Copy> Metered<K> {
         self.buckets.len()
     }
 
-    fn prune(&mut self, now_ms: u64) {
+    fn prune(&mut self, now_ms: u64, keep: K) {
         if self.buckets.len() <= self.max_keys {
             return;
         }
@@ -164,9 +164,14 @@ impl<K: Eq + Hash + Copy> Metered<K> {
         // Oldest first, by when the key was last consulted. A key that was
         // just asked about is therefore never the one dropped, which matters:
         // dropping it would hand the caller a fresh allowance.
+        // Oldest first, by when the key was last consulted — and never the key
+        // in hand. Every key touched at the same millisecond ties, and on a tie
+        // the order is `HashMap`'s; dropping the caller's own key would hand it
+        // a fresh allowance, which is the one thing this must not do.
         let mut by_age: Vec<(K, u64)> = self
             .buckets
             .iter()
+            .filter(|(key, _)| **key != keep)
             .map(|(key, bucket)| (*key, bucket.touched_at))
             .collect();
         by_age.sort_by_key(|(_, touched_at)| *touched_at);
@@ -268,16 +273,16 @@ mod tests {
     }
 
     #[test]
-    fn a_pruned_key_is_not_handed_a_fresh_allowance_inside_its_window() {
-        let mut metered = Metered::new(2.0, 60_000, 2);
+    fn the_key_in_hand_is_never_the_one_dropped_when_the_map_is_full() {
+        // One key in the map, and two units of allowance: every call after the
+        // first is over capacity, so a call that dropped its own key would hand
+        // itself a fresh bucket — and the refusal below would never come.
+        let mut metered = Metered::new(2.0, 60_000, 1);
         assert!(metered.take(1u32, 1.0, 0).is_allowed());
-        assert!(metered.take(1u32, 1.0, 0).is_allowed());
-        metered.take(2u32, 1.0, 0);
-        metered.take(3u32, 1.0, 0);
-        assert!(matches!(
-            metered.take(1u32, 1.0, 10),
-            Admission::Deny { .. }
-        ));
+        assert!(metered.take(2u32, 1.0, 0).is_allowed());
+        assert!(metered.take(2u32, 1.0, 0).is_allowed());
+        assert!(matches!(metered.take(2u32, 1.0, 0), Admission::Deny { .. }));
+        assert!(metered.tracked_keys() <= 2);
     }
 
     #[test]
