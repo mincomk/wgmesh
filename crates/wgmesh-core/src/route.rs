@@ -56,10 +56,15 @@ pub enum RoutingError {
     PrefixesWithUnmanagedTable(usize),
 }
 
+/// Whether this prefix covers every address, which is what makes it a default route.
+///
+/// Only the mask decides: the kernel masks the bits past the prefix length before it looks
+/// at them, so `10.0.0.0/0` is the same route as `0.0.0.0/0`. Reading the host bits as
+/// well let a non-canonical spelling through every check that guards the table.
 pub fn is_catch_all(prefix: &Allowed) -> bool {
     match prefix {
-        Allowed::V4(bytes, mask) => *mask == 0 && bytes.iter().all(|byte| *byte == 0),
-        Allowed::V6(bytes, mask) => *mask == 0 && bytes.iter().all(|byte| *byte == 0),
+        Allowed::V4(_, mask) => *mask == 0,
+        Allowed::V6(_, mask) => *mask == 0,
     }
 }
 
@@ -242,6 +247,32 @@ mod tests {
                 None
             ),
             Err(RoutingError::CatchAllPrefix(Allowed::V4([0, 0, 0, 0], 0)))
+        );
+        // A mask of zero covers everything whatever the host bits say, so these are the
+        // same route written differently and must not reach a table either.
+        assert_eq!(
+            validate_route_prefixes(&[Allowed::V4([10, 0, 0, 0], 0)]),
+            Err(RoutingError::CatchAllPrefix(Allowed::V4([10, 0, 0, 0], 0)))
+        );
+        assert_eq!(
+            validate_route_prefixes(&[Allowed::V6(
+                [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                0
+            )]),
+            Err(RoutingError::CatchAllPrefix(Allowed::V6(
+                [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                0
+            )))
+        );
+        assert_eq!(
+            desired_routes(
+                &[net()],
+                &[],
+                &RoutePrefixes::Only(vec![Allowed::V4([10, 0, 0, 0], 0)]),
+                RouteTable::Main,
+                None
+            ),
+            Err(RoutingError::CatchAllPrefix(Allowed::V4([10, 0, 0, 0], 0)))
         );
     }
 

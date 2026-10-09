@@ -662,6 +662,21 @@ mod tests {
     }
 
     #[test]
+    fn a_default_route_is_refused_however_its_host_bits_are_written() {
+        // The kernel masks the bits past the prefix length, so these are the same route.
+        for text in ["10.0.0.0/0", "203.0.113.9/0", "fd00::/0"] {
+            let mut settings = valid();
+            settings.route.prefixes = RoutePrefixesSetting::Only(vec![prefix(text)]);
+            let problems = validate(&settings);
+            assert!(
+                has_errors(&problems),
+                "{text} was accepted as a prefix list"
+            );
+            assert!(render(&problems).contains("route.prefixes"));
+        }
+    }
+
+    #[test]
     fn an_unmanaged_table_with_a_prefix_list_is_refused() {
         let mut settings = valid();
         settings.route.table = RouteTableSetting::Unmanaged;
