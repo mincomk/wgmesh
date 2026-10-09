@@ -353,6 +353,92 @@ async fn a_request_further_than_a_minute_from_now_is_refused() {
     }
 }
 
+// --- the replay window ------------------------------------------------------
+
+/// The nonce cache exists for one attack: somebody who saw a request go by sends it again.
+///
+/// A *verbatim* replay is already refused by the timestamp alone, so the case worth proving is
+/// the refreshed one — the same nonce re-signed at the current time, which passes the clock
+/// window and would be served if the coordinator checked nothing but the signature. This also
+/// pins the ordering the design asks for: the nonce window outlives the timestamp window, so
+/// there is no instant at which a captured nonce is both still remembered as spent and fresh
+/// enough to present.
+#[tokio::test]
+async fn a_captured_nonce_is_refused_inside_its_window_and_forgotten_after_it() {
+    let harness = Harness::new().await;
+    let signing = keypair(11);
+    let (identity, _, state) = harness.enrol("replayed", &signing, true).await;
+    assert_eq!(state, "active");
+
+    // A request goes by, and somebody keeps it.
+    let (status, body, _) = harness
+        .send(get_signed_at(
+            "/v1/config",
+            &signing,
+            &identity,
+            "captured",
+            NOW_SECS as i64,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Past the timestamp window and well inside the nonce cache: the nonce is re-signed at the
+    // current time, which is a perfect request in every other respect.
+    harness
+        .clock
+        .advance(Millis::from_secs(auth::MAX_SKEW_SECS + 1));
+    let now = NOW_SECS as i64 + auth::MAX_SKEW_SECS as i64 + 1;
+
+    let (status, body, _) = harness
+        .send(get_signed_at(
+            "/v1/config",
+            &signing,
+            &identity,
+            "captured",
+            now,
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a captured nonce was replayed with a fresh timestamp: {body}"
+    );
+
+    // The refusal is about the nonce and nothing else: a fresh nonce over the same route, at the
+    // same moment and with the same key, is answered.
+    let (status, body, _) = harness
+        .send(get_signed_at(
+            "/v1/config",
+            &signing,
+            &identity,
+            "fresh",
+            now,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // And the cache is a window rather than a blacklist: once it has passed, the nonce is
+    // forgotten and a request signed with it at the current time is served.
+    harness
+        .clock
+        .advance(Millis::from_secs(auth::NONCE_TTL_SECS));
+    let later = now + auth::NONCE_TTL_SECS as i64;
+    let (status, body, _) = harness
+        .send(get_signed_at(
+            "/v1/config",
+            &signing,
+            &identity,
+            "captured",
+            later,
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the nonce outlived its window: {body}"
+    );
+}
+
 // --- what the database keeps ------------------------------------------------
 
 /// The point of the step: nothing the coordinator stores is worth stealing.
