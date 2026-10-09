@@ -130,9 +130,10 @@ pub(crate) async fn assigned_relay(
         if relay.state != RelayState::Active {
             continue;
         }
-        let fresh = relay
-            .last_heartbeat_at
-            .is_some_and(|seen| now.0.saturating_sub(seen.0) <= HEARTBEAT_GRACE.0);
+        let fresh = !relay.draining
+            && relay
+                .last_heartbeat_at
+                .is_some_and(|seen| now.0.saturating_sub(seen.0) <= HEARTBEAT_GRACE.0);
         if fresh {
             live.push(relay.id);
         }

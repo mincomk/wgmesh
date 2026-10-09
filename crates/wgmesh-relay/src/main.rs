@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 use tokio::signal::unix::{SignalKind, signal};
 use wgmesh_relay::wgmesh_core::Millis;
 use wgmesh_relay::{
-    Assignment, Keyset, KeysetNetwork, KeysetPeer, PairAssignment, RelayConfig, RelayEngine,
-    SlotAssignment, UdpSlotSockets, shutdown,
+    Assignment, EstablishedSessions, Keyset, KeysetNetwork, KeysetPeer, PairAssignment,
+    RelayConfig, RelayEngine, SlotAssignment, UdpSlotSockets, shutdown,
 };
 
 const DEFAULT_CONFIG: &str = "/etc/wgmesh/relay.toml";
@@ -42,7 +42,7 @@ COMMANDS:
     enroll    Generate the relay key and reach for the coordinator
     run       Serve the slot sockets and forward between the assigned pairs
     status    Print the running relay's last status snapshot
-    drain     Ask the running relay to stop taking new traffic (--off to resume)
+    drain     Stop taking new pairs and hand over what it is carrying (--off to resume)
     keyset    Show the keyset the relay is serving, or ask it to refresh (--refresh)
 
 OPTIONS:
@@ -234,6 +234,17 @@ fn parse_config(text: &str) -> Result<ParsedConfig, String> {
             }
             ("", "keyset_ttl_secs") | ("relay", "keyset_ttl_secs" | "keyset_ttl") => {
                 relay.keyset_ttl = Duration::from_secs(parse_number(value, number)?);
+            }
+            ("", "established_sessions") | ("relay", "established_sessions") => {
+                relay.established_sessions = match value {
+                    "serve" => EstablishedSessions::Serve,
+                    "refuse" => EstablishedSessions::Refuse,
+                    _ => {
+                        return Err(format!(
+                            "line {number}: `{value}` is not `serve` or `refuse`"
+                        ));
+                    }
+                };
             }
             ("", "rate_limit_pps_per_slot") | ("relay", "rate_limit_pps_per_slot") => {
                 relay.pps_per_slot = parse_number(value, number)?;
@@ -504,6 +515,13 @@ fn render_status(engine: &RelayEngine<UdpSlotSockets>, at: Millis) -> String {
         format!("at_ms={}", status.at),
         format!("uptime_ms={}", status.uptime_ms),
         format!("draining={}", status.draining),
+        format!(
+            "established_sessions={}",
+            match engine.config().established_sessions {
+                EstablishedSessions::Serve => "serve",
+                EstablishedSessions::Refuse => "refuse",
+            }
+        ),
         format!("slots={}", status.slots.len()),
         format!("pairs={}", status.pairs.len()),
         format!("keyset_devices={}", status.keyset_devices),
@@ -638,7 +656,10 @@ fn drain(flags: &Flags, state_dir: &Path) -> Result<(), String> {
     }
     fs::write(&path, b"drain\n").map_err(|error| format!("{}: {error}", path.display()))?;
     println!("drain requested  {}", path.display());
-    println!("a running relay stops taking new traffic within one poll of the flag");
+    println!(
+        "a running relay stops taking new pairs within one poll of the flag; the pairs it \
+         already carries keep working until the coordinator moves them elsewhere"
+    );
     Ok(())
 }
 

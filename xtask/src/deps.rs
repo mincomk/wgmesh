@@ -35,6 +35,11 @@ use serde_json::Value;
 // (crate, internal crates it may use, external crates it may use)
 const ALLOWED: &[(&str, &[&str], &[&str])] = &[
     ("wgmesh-core", &[], &["blake2"]),
+    (
+        "wgmesh-conformance",
+        &["wgmesh-core"],
+        &["blake2", "serde", "serde_json"],
+    ),
     ("wgmesh-ports", &["wgmesh-core"], &["async-trait"]),
     ("wgmesh-app", &["wgmesh-core", "wgmesh-ports"], &["tracing"]),
     (

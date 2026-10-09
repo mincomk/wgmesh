@@ -165,6 +165,8 @@ pub struct Heartbeat {
     pub at: Millis,
     pub agent_version: Option<String>,
     pub traffic: Vec<TrafficSample>,
+    /// The relay is draining: maintenance is coming and its pairs should move.
+    pub draining: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

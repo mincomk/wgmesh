@@ -32,6 +32,7 @@ type RelayRow = (
     Option<String>,
     Option<i64>,
     Option<String>,
+    i64,
 );
 type NetworkRow = (i64, String, String, i64, String);
 type AuditRow = (
@@ -124,6 +125,7 @@ fn to_relay(row: RelayRow) -> Result<Relay, PortError> {
         operator: row.8,
         last_heartbeat_at: row.9.map(|value| Millis::from_millis(value as u64)),
         agent_version: row.10,
+        draining: row.11 != 0,
     })
 }
 
@@ -140,7 +142,7 @@ fn to_network(row: NetworkRow) -> Network {
 const DEVICE_COLUMNS: &str =
     "id, network_id, name, wg_pubkey, api_pubkey, tunnel_ip, state, advertised";
 const RELAY_COLUMNS: &str = "id, name, api_pubkey, state, endpoint_host, port_range, region, \
-     provider, operator, last_heartbeat_at, agent_version";
+     provider, operator, last_heartbeat_at, agent_version, draining";
 
 #[async_trait::async_trait]
 impl TokenStore for Sqlite {
@@ -412,6 +414,7 @@ impl Directory for Sqlite {
             operator: spec.operator.clone(),
             last_heartbeat_at: None,
             agent_version: None,
+            draining: false,
         })
     }
 
@@ -477,6 +480,16 @@ impl Directory for Sqlite {
     async fn set_relay_state(&self, id: RelayId, state: RelayState) -> Result<(), PortError> {
         sqlx::query("UPDATE relays SET state = ? WHERE id = ?")
             .bind(state.as_str())
+            .bind(i64::from(id.0))
+            .execute(&self.pool)
+            .await
+            .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn set_relay_draining(&self, id: RelayId, draining: bool) -> Result<(), PortError> {
+        sqlx::query("UPDATE relays SET draining = ? WHERE id = ?")
+            .bind(i64::from(draining))
             .bind(i64::from(id.0))
             .execute(&self.pool)
             .await

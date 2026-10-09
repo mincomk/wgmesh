@@ -375,6 +375,7 @@ pub async fn relay_heartbeat(
                 at: now,
                 agent_version: body.agent_version,
                 traffic,
+                draining: body.draining,
             },
         )
         .await
