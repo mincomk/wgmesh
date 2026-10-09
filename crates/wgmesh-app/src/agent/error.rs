@@ -26,6 +26,8 @@ pub enum AppError {
     },
     /// There is no state to resume from, and no join token to enroll with.
     MissingJoinToken,
+    /// There is no state to operate on.
+    NotEnrolled,
     /// The routing policy refused the configuration.
     Routing(RoutingError),
     /// The secret store refused.
@@ -45,7 +47,7 @@ impl AppError {
     pub fn class(&self) -> Class {
         match self {
             Self::TrustMismatch { .. } => Class::Trust,
-            Self::MissingJoinToken | Self::Routing(_) => Class::Fatal,
+            Self::MissingJoinToken | Self::NotEnrolled | Self::Routing(_) => Class::Fatal,
             Self::Secrets(error) | Self::State(error) => error.class(),
             Self::Coordinator(error) | Self::WireGuard(error) | Self::Routes(error) => {
                 error.class()
@@ -70,6 +72,7 @@ impl fmt::Display for AppError {
             Self::MissingJoinToken => {
                 f.write_str("there is no state to resume from and no join token to enroll with")
             }
+            Self::NotEnrolled => f.write_str("there is no state to operate on"),
             Self::Routing(error) => write!(f, "routing policy: {error:?}"),
             Self::Secrets(error) => write!(f, "secret store: {error}"),
             Self::State(error) => write!(f, "state store: {error}"),

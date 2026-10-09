@@ -308,7 +308,7 @@ where
             .state
             .load()
             .map_err(AppError::State)?
-            .ok_or(AppError::MissingJoinToken)?;
+            .ok_or(AppError::NotEnrolled)?;
         state.coordinator.spki = spki;
         self.ports.state.save(&state).map_err(AppError::State)?;
         Ok(state)
@@ -480,7 +480,8 @@ where
         let desired_peers =
             program_peers(self.settings.allowed_ips, &snapshot.peers, self.settings)
                 .map_err(AppError::Routing)?;
-        let current = self.current_peers().map_err(AppError::WireGuard)?;
+        let statuses = self.wireguard.status(&[]).map_err(AppError::WireGuard)?;
+        let current: BTreeMap<DeviceId, PeerSpec> = statuses.iter().map(as_spec).collect();
         let peer_changes = diff(&desired_peers, &current);
         if !peer_changes.is_empty() {
             self.wireguard
@@ -500,7 +501,7 @@ where
         let mut next = state.clone();
         next.coordinator.etag = Some(snapshot.etag.clone());
         next.coordinator.last_sync = at;
-        next.peers = records(&desired_peers, &current);
+        next.peers = records(&desired_peers, &statuses);
         next.routes = desired_routes.clone();
         self.state.save(&next).map_err(AppError::State)?;
 
@@ -510,12 +511,6 @@ where
             peer_changes,
             route_changes,
         })
-    }
-
-    /// What the kernel currently holds, as `core::diff` wants to see it.
-    fn current_peers(&self) -> Result<BTreeMap<DeviceId, PeerSpec>, wgmesh_ports::WireGuardError> {
-        let statuses = self.wireguard.status(&[])?;
-        Ok(statuses.iter().map(as_spec).collect())
     }
 }
 
@@ -664,19 +659,21 @@ fn as_spec(status: &PeerStatus) -> (DeviceId, PeerSpec) {
 }
 
 /// What the device should remember about the peers it just programmed.
-fn records(peers: &[PeerSpec], current: &BTreeMap<DeviceId, PeerSpec>) -> Vec<PeerRecord> {
+fn records(peers: &[PeerSpec], statuses: &[PeerStatus]) -> Vec<PeerRecord> {
     peers
         .iter()
         .map(|peer| {
-            let held = current.get(&peer.id);
+            let status = statuses.iter().find(|status| status.device == peer.id);
             PeerRecord {
                 device: peer.id,
                 name: None,
                 public_key: peer.key,
                 tunnel_ip: tunnel_address(&peer.allowed),
-                endpoint: held.and_then(|spec| spec.endpoint).or(peer.endpoint),
+                endpoint: status.and_then(|status| status.endpoint).or(peer.endpoint),
+                // Which way traffic is going is the traversal's to know, not a convergence's:
+                // one that guessed would write down a path this device never took.
                 path: Path::Unknown,
-                last_handshake: None,
+                last_handshake: status.and_then(|status| status.last_handshake),
             }
         })
         .collect()
