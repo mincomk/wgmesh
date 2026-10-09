@@ -14,13 +14,16 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use http_body_util::BodyExt as _;
 use tower::ServiceExt;
 
-use wgmesh_app::coordinator::ports::{Directory, NewJoinToken, NewNetwork, TokenKind, TokenStore};
+use wgmesh_app::coordinator::ports::{
+    DeviceState, Directory, NewDevice, NewJoinToken, NewNetwork, NewRelay, Placement, RelayState,
+    TokenKind, TokenStore,
+};
 use wgmesh_coordinator::clock::FixedClock;
 use wgmesh_coordinator::http::watch_config;
 use wgmesh_coordinator::router;
 use wgmesh_coordinator::service::Services;
 use wgmesh_coordinator::store::Sqlite;
-use wgmesh_core::{Millis, PublicKey};
+use wgmesh_core::{DeviceId, Millis, PublicKey, RelayId};
 use wgmesh_proto::encode_key;
 use wgmesh_proto::sign as auth;
 use wgmesh_proto::token as join_token;
@@ -40,6 +43,45 @@ async fn harness() -> (Router, Arc<Sqlite>, Services, u32, tempfile::TempDir) {
     let clock = Arc::new(FixedClock::new(Millis::from_secs(NOW_SECS)));
     let services = Services::new(Arc::clone(&store), clock);
     (router(services.clone()), store, services, network, dir)
+}
+
+/// A relay called `relay-N`, with the key derived from the name's last byte so two of
+/// them never collide on `relays.api_pubkey`.
+async fn insert_relay(store: &Sqlite, name: &str) -> RelayId {
+    let sign = *name.as_bytes().last().expect("a name has a byte");
+    let signing = SigningKey::from_bytes(&[sign; 32]);
+    store
+        .insert_relay(&NewRelay {
+            name: name.to_owned(),
+            api_pubkey: PublicKey::from_bytes(signing.verifying_key().to_bytes()),
+            state: RelayState::Active,
+            endpoint_host: "198.51.100.4".to_owned(),
+            port_range: "51900-51999".to_owned(),
+            region: None,
+            provider: None,
+            operator: None,
+            created_at: Millis::from_secs(NOW_SECS),
+        })
+        .await
+        .expect("relay")
+        .id
+}
+
+async fn insert_device(store: &Sqlite, network_id: u32, name: &str, seed: u8) -> DeviceId {
+    store
+        .insert_device(&NewDevice {
+            network_id,
+            name: name.to_owned(),
+            wg_pubkey: PublicKey::from_bytes([seed; 32]),
+            api_pubkey: PublicKey::from_bytes([seed.wrapping_add(100); 32]),
+            tunnel_ip: format!("10.77.0.{seed}/16"),
+            state: DeviceState::Active,
+            advertised: Vec::new(),
+            created_at: Millis::from_secs(NOW_SECS),
+        })
+        .await
+        .expect("device")
+        .id
 }
 
 async fn insert_network(store: &Sqlite, name: &str, cidr: &str) -> u32 {
@@ -369,5 +411,41 @@ async fn the_join_allowance_comes_from_the_services_not_a_constant() {
         status,
         StatusCode::TOO_MANY_REQUESTS,
         "an allowance of two per minute has to refuse the third: {body}"
+    );
+}
+
+/// Re-homing a pair moves it to another relay **without changing how many pairs
+/// there are** — and the version a stream pushes has to change anyway, because a
+/// node has to be told that its peer moved.
+#[tokio::test]
+async fn re_homing_a_pair_changes_the_version_a_stream_pushes() {
+    let (_app, store, _services, network, _dir) = harness().await;
+    let first = insert_relay(&store, "relay-1").await;
+    let second = insert_relay(&store, "relay-2").await;
+    store
+        .link_relay_network(first, network)
+        .await
+        .expect("link");
+    store
+        .link_relay_network(second, network)
+        .await
+        .expect("link");
+    let a = insert_device(&store, network, "a", 7).await;
+    let b = insert_device(&store, network, "b", 8).await;
+    let at = Millis::from_secs(NOW_SECS);
+
+    store.assign_pair(a, b, first, at).await.expect("assign");
+    let before = store.config_version().await.expect("version");
+
+    store.assign_pair(a, b, second, at).await.expect("re-home");
+    let after = store.config_version().await.expect("version");
+
+    assert_ne!(
+        before, after,
+        "moving a pair to another relay must change the version a stream pushes"
+    );
+    assert_eq!(
+        store.relay_for_pair(a, b).await.expect("pair"),
+        Some(second)
     );
 }

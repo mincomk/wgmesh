@@ -745,7 +745,12 @@ impl Sqlite {
     /// broadcast would be blind to the changes an operator makes by hand — and
     /// those are exactly the changes a node must learn about quickly.
     pub async fn config_version(&self) -> Result<u64, PortError> {
-        let (devices, pending, active, revoked, relays, pairs, networks): (
+        // The assignment term is not a count on purpose: re-homing a pair moves it
+        // to another relay without changing how many pairs there are, and a node has
+        // to be told about *that*. The sum is over the rows themselves, so any move
+        // changes it.
+        let (devices, pending, active, revoked, relays, pairs, networks, assignments): (
+            i64,
             i64,
             i64,
             i64,
@@ -760,7 +765,9 @@ impl Sqlite {
                     (SELECT COUNT(*) FROM devices WHERE state = ?3), \
                     (SELECT COUNT(*) FROM relays), \
                     (SELECT COUNT(*) FROM pair_assignments), \
-                    (SELECT COUNT(*) FROM networks)",
+                    (SELECT COUNT(*) FROM networks), \
+                    (SELECT COALESCE(SUM(relay_id * 1000003 + device_a * 1009 + device_b), 0) \
+                       FROM pair_assignments)",
         )
         .bind(DeviceState::Pending.as_str())
         .bind(DeviceState::Active.as_str())
@@ -772,7 +779,16 @@ impl Sqlite {
         // FNV-1a over the tuple: a change in any field changes the number, and
         // the exact value never leaves the coordinator.
         let mut version: u64 = 0xcbf2_9ce4_8422_2325;
-        for field in [devices, pending, active, revoked, relays, pairs, networks] {
+        for field in [
+            devices,
+            pending,
+            active,
+            revoked,
+            relays,
+            pairs,
+            networks,
+            assignments,
+        ] {
             for byte in field.to_le_bytes() {
                 version ^= u64::from(byte);
                 version = version.wrapping_mul(0x0000_0100_0000_01b3);
