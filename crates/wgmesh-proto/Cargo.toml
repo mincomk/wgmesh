@@ -11,3 +11,7 @@ workspace = true
 
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
+base64ct = { version = "1", features = ["alloc"] }
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"

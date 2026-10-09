@@ -46,7 +46,9 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
     (
         "wgmesh-proto",
         &["wgmesh-core"],
-        &["serde", "base64ct", "hex"],
+        // `sha2` is here because the signed-request canonical string hashes the
+        // request body, and the server has to rebuild that string byte for byte.
+        &["serde", "base64ct", "hex", "sha2"],
     ),
     (
         "wgmesh-wireguard",
@@ -68,7 +70,10 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-state",
             "wgmesh-secrets",
         ],
-        &["axum", "sqlx", "tokio", "tower-http"],
+        // `serde`/`serde_json` are here because a signed request is verified
+        // against the exact bytes of its body, so the handlers must read the body
+        // as bytes before they deserialize it.
+        &["axum", "sqlx", "tokio", "tower-http", "serde", "serde_json"],
     ),
     (
         "wgmesh-relay",
