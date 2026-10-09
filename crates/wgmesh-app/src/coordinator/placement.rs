@@ -113,7 +113,7 @@ impl AssignPair<'_> {
                 .relay_by_id(current)
                 .await
                 .map_err(PlaceError::Store)?
-                .is_some_and(|relay| relay.state == RelayState::Active);
+                .is_some_and(|relay| relay.state == RelayState::Active && !relay.draining);
             if still_up {
                 return Ok(Some(current));
             }

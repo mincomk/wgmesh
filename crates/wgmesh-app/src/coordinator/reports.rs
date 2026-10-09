@@ -2,7 +2,6 @@ use wgmesh_core::{DeviceId, Millis, RelayId};
 use wgmesh_ports::Clock;
 use wgmesh_ports::coordinator::{DeviceState, Directory, Placement, Relay, RelayState, Reports};
 
-use super::placement::AssignPair;
 use super::select_relay::SelectRelay;
 use super::types::{Heartbeat, Observation, PlacePolicy, RehomeReport, ReportError, TrafficSample};
 
@@ -74,20 +73,26 @@ impl IngestHeartbeat<'_> {
         relay: RelayId,
         heartbeat: &Heartbeat,
     ) -> Result<usize, ReportError> {
-        if self
+        let known = self
             .directory
             .relay_by_id(relay)
             .await
             .map_err(ReportError::Store)?
-            .is_none()
-        {
-            return Err(ReportError::UnknownRelay(relay));
-        }
+            .ok_or(ReportError::UnknownRelay(relay))?;
 
         self.directory
             .record_heartbeat(relay, heartbeat.at, heartbeat.agent_version.as_deref())
             .await
             .map_err(ReportError::Store)?;
+
+        // Only written when it changes: the heartbeat arrives every few seconds, and the
+        // flag is a state, not an event.
+        if known.draining != heartbeat.draining {
+            self.directory
+                .set_relay_draining(relay, heartbeat.draining)
+                .await
+                .map_err(ReportError::Store)?;
+        }
 
         let mut samples = 0;
         for TrafficSample {
@@ -140,7 +145,12 @@ impl IngestHeartbeat<'_> {
                 .await
                 .map_err(ReportError::Store)?
             {
-                if relay.state != RelayState::Active || !is_quiet(&relay, now, quiet_after) {
+                // A relay that has gone quiet has failed; a relay that is draining is
+                // leaving on purpose. Both have to hand their pairs over, and for the
+                // draining one waiting out the heartbeat timeout would hold the
+                // operator's maintenance window open.
+                let leaving = relay.draining || is_quiet(&relay, now, quiet_after);
+                if relay.state != RelayState::Active || !leaving {
                     continue;
                 }
                 for (left, right) in self
@@ -160,18 +170,19 @@ impl IngestHeartbeat<'_> {
                         .ok()
                         .flatten();
                     if let Some(to) = chosen {
-                        let assign = AssignPair {
-                            directory: self.directory,
-                            placement: self.placement,
-                            clock: self.clock,
-                        };
-                        if assign.execute(left, right).await.is_ok() {
-                            moved.push(RehomeReport {
-                                from: relay.id,
-                                to: Some(to),
-                                pair: (left, right),
-                            });
-                        }
+                        // Written straight to the placement, not through `AssignPair`: its
+                        // sticky rule keeps the pair wherever it is, which is right when
+                        // the pair is being re-evaluated and exactly wrong here, where the
+                        // relay it sits on is the one that has to be left.
+                        self.placement
+                            .assign_pair(left, right, to, self.clock.now())
+                            .await
+                            .map_err(ReportError::Store)?;
+                        moved.push(RehomeReport {
+                            from: relay.id,
+                            to: Some(to),
+                            pair: (left, right),
+                        });
                     } else {
                         moved.push(RehomeReport {
                             from: relay.id,
