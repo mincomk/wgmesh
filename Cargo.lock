@@ -2180,13 +2180,9 @@ dependencies = [
 name = "wgmesh-relay"
 version = "0.1.0"
 dependencies = [
- "wgmesh-app",
- "wgmesh-client",
- "wgmesh-config",
+ "socket2",
+ "tokio",
  "wgmesh-core",
- "wgmesh-proto",
- "wgmesh-secrets",
- "wgmesh-state",
 ]
 
 [[package]]
