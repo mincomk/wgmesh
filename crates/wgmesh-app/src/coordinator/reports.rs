@@ -126,11 +126,7 @@ impl IngestHeartbeat<'_> {
     /// A relay has no health column: staleness is a reading of
     /// `last_heartbeat_at`, so a relay that comes back needs nothing reset.
     pub async fn sweep(&self, now: Millis) -> Result<Vec<RehomeReport>, ReportError> {
-        let quiet_after = self
-            .policy
-            .heartbeat_timeout
-            .0
-            .saturating_mul(u64::from(self.policy.reassign_after_misses));
+        let stale_after = self.policy.stale_after();
         let mut moved = Vec::new();
 
         for network in self
@@ -145,12 +141,19 @@ impl IngestHeartbeat<'_> {
                 .await
                 .map_err(ReportError::Store)?
             {
-                // A relay that has gone quiet has failed; a relay that is draining is
-                // leaving on purpose. Both have to hand their pairs over, and for the
-                // draining one waiting out the heartbeat timeout would hold the
-                // operator's maintenance window open.
-                let leaving = relay.draining || is_quiet(&relay, now, quiet_after);
-                if relay.state != RelayState::Active || !leaving {
+                // Three ways a relay has to give its pairs up, and all of them have to be
+                // honoured here because nothing else ever moves an assignment:
+                //
+                //   * it is not `Active` — retired by an operator, or never brought into
+                //     service. Its pairs are otherwise stranded for good, with both peers
+                //     pointed at a relay the pool no longer offers them a slot on.
+                //   * it is draining — it is leaving on purpose, and waiting out the
+                //     heartbeat timeout would hold the maintenance window open.
+                //   * it has gone quiet — the failure this whole step is about.
+                let leaving = relay.state != RelayState::Active
+                    || relay.draining
+                    || is_quiet(&relay, now, stale_after);
+                if !leaving {
                     continue;
                 }
                 for (left, right) in self
@@ -163,6 +166,7 @@ impl IngestHeartbeat<'_> {
                         directory: self.directory,
                         placement: self.placement,
                         clock: self.clock,
+                        policy: self.policy,
                     };
                     let chosen = select
                         .execute(left, right, Some(relay.id))
@@ -220,9 +224,9 @@ impl IngestHeartbeat<'_> {
     }
 }
 
-fn is_quiet(relay: &Relay, now: Millis, quiet_after: u64) -> bool {
+fn is_quiet(relay: &Relay, now: Millis, stale_after: Millis) -> bool {
     match relay.last_heartbeat_at {
-        Some(last) => now.0.saturating_sub(last.0) > quiet_after,
+        Some(last) => now.0.saturating_sub(last.0) > stale_after.0,
         None => true,
     }
 }

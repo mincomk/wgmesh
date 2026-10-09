@@ -2,10 +2,7 @@ use wgmesh_core::{DeviceId, Millis, RelayId};
 use wgmesh_ports::Clock;
 use wgmesh_ports::coordinator::{Directory, Placement, RelayState};
 
-use super::types::PlaceError;
-
-/// How stale a relay's last heartbeat may be before it stops being a candidate.
-pub const HEARTBEAT_GRACE: Millis = Millis::from_secs(30);
+use super::types::{PlaceError, PlacePolicy};
 
 /// Everything the choice is made from. Every field is a fact the caller already
 /// holds, so the decision itself is pure and can be replayed in a test.
@@ -30,8 +27,8 @@ pub struct RelayCandidate {
 }
 
 impl RelayCandidate {
-    fn is_fresh(&self, now: Millis) -> bool {
-        now.0.saturating_sub(self.last_seen.0) <= HEARTBEAT_GRACE.0
+    fn is_fresh(&self, now: Millis, stale_after: Millis) -> bool {
+        now.0.saturating_sub(self.last_seen.0) <= stale_after.0
     }
 
     fn rtt_sum(&self) -> Option<u32> {
@@ -48,10 +45,20 @@ impl RelayCandidate {
 /// re-homing a pair costs a re-punch and a short outage; otherwise take the
 /// relay both sides can reach with the lowest combined round-trip time, prefer
 /// a region this device is not already on, and spread the load.
-pub fn select_relay(candidates: &[RelayCandidate], now: Millis) -> Option<RelayId> {
+///
+/// `stale_after` is the coordinator's own reading of how long a relay may be
+/// silent before it is gone — [`PlacePolicy::stale_after`]. It is an argument
+/// rather than a constant here so that the choice which places a pair and the
+/// sweep which re-homes one cannot disagree about which relays still exist: a
+/// pair must never be placed on a relay the sweep has already declared gone.
+pub fn select_relay(
+    candidates: &[RelayCandidate],
+    now: Millis,
+    stale_after: Millis,
+) -> Option<RelayId> {
     let usable: Vec<&RelayCandidate> = candidates
         .iter()
-        .filter(|candidate| candidate.is_fresh(now))
+        .filter(|candidate| candidate.is_fresh(now, stale_after))
         .collect();
 
     if let Some(sticky) = usable.iter().find(|candidate| candidate.current) {
@@ -77,6 +84,7 @@ pub struct SelectRelay<'a> {
     pub directory: &'a dyn Directory,
     pub placement: &'a dyn Placement,
     pub clock: &'a dyn Clock,
+    pub policy: PlacePolicy,
 }
 
 impl SelectRelay<'_> {
@@ -87,7 +95,11 @@ impl SelectRelay<'_> {
         exclude: Option<RelayId>,
     ) -> Result<Option<RelayId>, PlaceError> {
         let candidates = self.candidates(device_a, device_b, exclude).await?;
-        Ok(select_relay(&candidates, self.clock.now()))
+        Ok(select_relay(
+            &candidates,
+            self.clock.now(),
+            self.policy.stale_after(),
+        ))
     }
 
     /// Every relay of the pair's network as a candidate, minus `exclude`.

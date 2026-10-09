@@ -45,16 +45,39 @@ impl Default for JoinPolicy {
 
 /// When a relay counts as gone, and how much slack a pair gets before it is
 /// moved.
+///
+/// `heartbeat_timeout` is the window one heartbeat is given, so a window that
+/// passes with no heartbeat is one miss. The design has a relay report every
+/// five seconds and be re-homed after three misses in a row, which is why the
+/// shipped default is 5s and the deadline it derives to is 15s.
 #[derive(Clone, Copy, Debug)]
 pub struct PlacePolicy {
     pub heartbeat_timeout: Millis,
     pub reassign_after_misses: u32,
 }
 
+impl PlacePolicy {
+    /// How stale a relay's last heartbeat may be before the coordinator stops
+    /// treating it as a place a pair may be.
+    ///
+    /// One reading, asked by everything that has to answer "is this relay still
+    /// there?": the sweep that moves pairs off one that has gone quiet, the
+    /// choice that places a new pair, and the sticky rule that keeps a working
+    /// one where it is. Two answers would let a pair be re-homed onto a relay
+    /// the sweep already calls gone.
+    pub const fn stale_after(self) -> Millis {
+        Millis::from_millis(
+            self.heartbeat_timeout
+                .0
+                .saturating_mul(self.reassign_after_misses as u64),
+        )
+    }
+}
+
 impl Default for PlacePolicy {
     fn default() -> Self {
         Self {
-            heartbeat_timeout: Millis::from_secs(15),
+            heartbeat_timeout: Millis::from_secs(5),
             reassign_after_misses: 3,
         }
     }

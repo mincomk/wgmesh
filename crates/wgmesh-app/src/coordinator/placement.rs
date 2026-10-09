@@ -4,7 +4,7 @@ use wgmesh_ports::coordinator::{Device, Directory, Placement, RelayState};
 
 use super::net::next_free_port;
 use super::select_relay::SelectRelay;
-use super::types::PlaceError;
+use super::types::{PlaceError, PlacePolicy};
 
 /// Pairs are stored under one canonical order so a lookup never has to guess.
 pub const fn order(left: DeviceId, right: DeviceId) -> (DeviceId, DeviceId) {
@@ -61,6 +61,7 @@ pub async fn pair_with_network(
     directory: &dyn Directory,
     placement: &dyn Placement,
     clock: &dyn Clock,
+    policy: PlacePolicy,
     device: &Device,
 ) -> Result<Vec<RelayId>, PlaceError> {
     let mut relays = Vec::new();
@@ -76,6 +77,7 @@ pub async fn pair_with_network(
             directory,
             placement,
             clock,
+            policy,
         };
         if let Some(relay) = assign.execute(device.id, peer.id).await? {
             relays.push(relay);
@@ -89,6 +91,7 @@ pub struct AssignPair<'a> {
     pub directory: &'a dyn Directory,
     pub placement: &'a dyn Placement,
     pub clock: &'a dyn Clock,
+    pub policy: PlacePolicy,
 }
 
 impl AssignPair<'_> {
@@ -108,12 +111,25 @@ impl AssignPair<'_> {
             .await
             .map_err(PlaceError::Store)?
         {
+            // "Still up" means the coordinator has heard from it recently, not
+            // merely that nobody has retired it: a relay that went quiet is the
+            // case this whole path exists for, and keeping a pair on one would
+            // leave it dead until the next sweep. The reading is the policy's,
+            // the same one the sweep moves pairs by.
+            let now = self.clock.now();
+            let stale_after = self.policy.stale_after();
             let still_up = self
                 .directory
                 .relay_by_id(current)
                 .await
                 .map_err(PlaceError::Store)?
-                .is_some_and(|relay| relay.state == RelayState::Active && !relay.draining);
+                .is_some_and(|relay| {
+                    relay.state == RelayState::Active
+                        && !relay.draining
+                        && relay
+                            .last_heartbeat_at
+                            .is_some_and(|seen| now.0.saturating_sub(seen.0) <= stale_after.0)
+                });
             if still_up {
                 return Ok(Some(current));
             }
@@ -123,6 +139,7 @@ impl AssignPair<'_> {
             directory: self.directory,
             placement: self.placement,
             clock: self.clock,
+            policy: self.policy,
         };
         let chosen = select.execute(pair.0, pair.1, None).await?;
         if let Some(relay) = chosen {

@@ -7,9 +7,9 @@ use wgmesh_ports::coordinator::{
 
 use super::net::{host_prefix, parse_cidr};
 use super::placement::order;
-use super::select_relay::HEARTBEAT_GRACE;
 use super::types::{
-    ConfigError, ConfigSnapshot, MeView, PeerView, RelayPoolEntry, RelayView, SelfObservation,
+    ConfigError, ConfigSnapshot, MeView, PeerView, PlacePolicy, RelayPoolEntry, RelayView,
+    SelfObservation,
 };
 
 /// The design's `persistent-keepalive`, in seconds.
@@ -21,6 +21,7 @@ pub struct BuildConfig<'a> {
     pub placement: &'a dyn Placement,
     pub reports: &'a dyn Reports,
     pub clock: &'a dyn Clock,
+    pub policy: PlacePolicy,
 }
 
 impl BuildConfig<'_> {
@@ -41,9 +42,15 @@ impl BuildConfig<'_> {
         let slots = relay_slots(self.directory, self.placement, &record)
             .await
             .map_err(ConfigError::Store)?;
-        let assigned = assigned_relay(self.directory, self.placement, &record, self.clock)
-            .await
-            .map_err(ConfigError::Store)?;
+        let assigned = assigned_relay(
+            self.directory,
+            self.placement,
+            &record,
+            self.clock,
+            self.policy,
+        )
+        .await
+        .map_err(ConfigError::Store)?;
         let slot_port = assigned.and_then(|relay| {
             slots
                 .iter()
@@ -121,10 +128,12 @@ pub(crate) async fn assigned_relay(
     placement: &dyn Placement,
     device: &Device,
     clock: &dyn Clock,
+    policy: PlacePolicy,
 ) -> Result<Option<RelayId>, PortError> {
     let mut peer_relays: Vec<(DeviceId, RelayId)> = Vec::new();
     let mut live: Vec<RelayId> = Vec::new();
     let now = clock.now();
+    let stale_after = policy.stale_after();
 
     for relay in directory.relays_of(device.network_id).await? {
         if relay.state != RelayState::Active {
@@ -133,7 +142,7 @@ pub(crate) async fn assigned_relay(
         let fresh = !relay.draining
             && relay
                 .last_heartbeat_at
-                .is_some_and(|seen| now.0.saturating_sub(seen.0) <= HEARTBEAT_GRACE.0);
+                .is_some_and(|seen| now.0.saturating_sub(seen.0) <= stale_after.0);
         if fresh {
             live.push(relay.id);
         }
