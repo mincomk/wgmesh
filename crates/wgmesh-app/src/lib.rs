@@ -8,6 +8,8 @@
 // That is why the whole of this crate runs in a test with no kernel, no network and no clock.
 
 pub mod agent;
+pub mod doctor;
+pub mod routes;
 
 pub use agent::effect::{Effect, dispatch, dispatch_all};
 pub use agent::error::AppError;
@@ -16,3 +18,11 @@ pub use agent::{
 };
 
 pub mod coordinator;
+
+pub use doctor::{Check, CheckState, ForwardingObservation, forwarding_checks};
+pub use routes::{
+    CatchAllPolicy, ConvergenceError, PeerPlan, RouteConvergence, RoutingPolicyError,
+    RoutingProblem, describe_routing, desired_routes_of, peer_plan, peers_report, peers_view,
+    prefixes_label, resolve_policy, route_plan_view, table_label, unmanaged_plan_view,
+    validate_routing,
+};
