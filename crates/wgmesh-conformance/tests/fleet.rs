@@ -71,25 +71,44 @@ fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
 
     // Let both (doomed) punches expire and both pairs settle back on their relay,
     // so what the kill measures is the relay's liveness and nothing else.
-    let settled = wait_until(budget::PUNCHES_EXPIRED, || {
-        ab.a.agent.attempts() >= 1
-            && ab.b.agent.attempts() >= 1
-            && cd.a.agent.attempts() >= 1
-            && cd.b.agent.attempts() >= 1
-            && ab.a.agent.up()
-            && ab.b.agent.up()
-            && cd.a.agent.up()
-            && cd.b.agent.up()
+    //
+    // The evidence is each agent's own record of a probe that gave up -- a fact
+    // the state machine writes once -- rather than a sampled `up()`. A machine
+    // that starves an agent for longer than `UP_WINDOW` makes a live pair read as
+    // down, and a wait that needs four such readings at the same instant would be
+    // waiting on the scheduler.
+    let expired = wait_until(budget::PUNCHES_EXPIRED, || {
+        [&ab.a, &ab.b, &cd.a, &cd.b]
+            .iter()
+            .all(|peer| peer.agent.snapshot().fallback_ms.is_some())
     });
     assert!(
-        settled,
+        expired,
         "the punch window must expire and fall back to the relay, but {} was never seen: \
-         ab {}/{} cd {}/{}",
+         ab {}/{} cd {}/{} fell back",
         budget::PUNCHES_EXPIRED,
-        ab.a.agent.snapshot().attempts,
-        ab.b.agent.snapshot().attempts,
-        cd.a.agent.snapshot().attempts,
-        cd.b.agent.snapshot().attempts
+        ab.a.agent.snapshot().fallback_ms.is_some(),
+        ab.b.agent.snapshot().fallback_ms.is_some(),
+        cd.a.agent.snapshot().fallback_ms.is_some(),
+        cd.b.agent.snapshot().fallback_ms.is_some()
+    );
+
+    // And the relayed path is carrying traffic on both pairs, which is what the
+    // kill is measured against. This one is a reading of `up()`, waited for on
+    // its own: below this line the scenario is entitled to assume the relay was
+    // live, and above it it is not.
+    let carrying = wait_until(budget::RELAYS_CARRYING, || {
+        ab.a.agent.up() && ab.b.agent.up() && cd.a.agent.up() && cd.b.agent.up()
+    });
+    assert!(
+        carrying,
+        "the relayed path has to be carrying traffic before the kill means anything, but {} \
+         was never seen: ab {}/{} cd {}/{}",
+        budget::RELAYS_CARRYING,
+        ab.a.agent.up(),
+        ab.b.agent.up(),
+        cd.a.agent.up(),
+        cd.b.agent.up()
     );
     let forwarded_before = relay_forwarded(&coordinator.state());
 
@@ -106,7 +125,7 @@ fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
     let mut cd_longest_gap = 0usize;
     let started = Instant::now();
     let deadline = budget::CUT_PAIR_REHOMED.deadline_from(started);
-    let mut recovered = false;
+    let mut rehomed = false;
     while Instant::now() < deadline {
         let ab_up = ab.a.agent.up() && ab.b.agent.up();
         let cd_up = cd.a.agent.up() && cd.b.agent.up();
@@ -122,19 +141,27 @@ fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
             cd_down_run += 1;
             cd_longest_gap = cd_longest_gap.max(cd_down_run);
         }
-        let rehomed =
-            ab.a.agent.snapshot().assignments >= 2 && ab.b.agent.snapshot().assignments >= 2;
-        if rehomed && ab_up {
-            recovered = true;
+        // Re-homing is the counter each end keeps, not a sample: an agent that
+        // acted on its second assignment has been re-homed, whatever the harness
+        // caught it doing at that instant.
+        if ab.a.agent.snapshot().assignments >= 2 && ab.b.agent.snapshot().assignments >= 2 {
+            rehomed = true;
             break;
         }
         thread::sleep(SAMPLE);
     }
-    if !recovered {
+    if !rehomed {
         budget::CUT_PAIR_REHOMED.expired(started.elapsed());
     }
 
-    let ab_recovered = ab.a.agent.up() && ab.b.agent.up();
+    // Reachability is its own wait rather than a single reading taken at the end:
+    // a re-homed pair is up again the moment its next keepalive lands on the
+    // survivor, and on a loaded machine that moment is not the moment the
+    // assignment was made.
+    let ab_recovered = wait_until(budget::CUT_PAIR_REACHABLE, || {
+        ab.a.agent.up() && ab.b.agent.up()
+    });
+
     let ab_assignments = ab.a.agent.snapshot().assignments;
     let cd_assignments = cd.a.agent.snapshot().assignments;
 
@@ -165,7 +192,8 @@ fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
     );
     assert!(
         ab_recovered,
-        "and must be reachable again once it is re-homed onto the survivor"
+        "and must be reachable again once it is re-homed onto the survivor: {} was never seen",
+        budget::CUT_PAIR_REACHABLE
     );
     assert_eq!(
         cd_assignments, 1,

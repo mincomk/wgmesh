@@ -32,14 +32,14 @@ const REPORT_AFTER: Duration = Duration::from_secs(5);
 ///
 /// A wait is not a sleep: it polls for a condition the lab itself produces, so
 /// on a quiet machine it returns as soon as the condition holds and the budget
-/// is never approached. The budget exists for the
-/// machine, not for the scenario: `cargo test -p wgmesh-conformance` can be run
-/// with the crate's three scenario binaries at once, each already running its
-/// scenarios on their own threads, and CI runs the whole workspace on a runner
-/// that may be smaller than this one. A budget a loaded machine can exhaust is
-/// the bug this type exists to make impossible; when one does run out, the wait
-/// says so -- which evidence was missing, and how long it was given -- rather
-/// than leaving a reader to guess whether the lab was slow or broken.
+/// is never approached. The budget exists for the machine, not for the scenario:
+/// cargo runs a crate's test targets one after another, but the three scenario
+/// binaries here can be run at once by hand -- each already running its scenarios
+/// on their own threads -- and CI runs the workspace on a runner that may be
+/// smaller than this one. A budget a loaded machine can exhaust is the bug this
+/// type exists to make impossible; when one does run out, the wait says so --
+/// which evidence was missing, and how long it was given -- rather than leaving a
+/// reader to guess whether the lab was slow or broken.
 #[derive(Clone, Copy, Debug)]
 pub struct Evidence {
     /// What the scenario is waiting to see, in the words a timeout prints.
@@ -130,18 +130,43 @@ pub mod budget {
     );
 
     /// Both punches have expired and both pairs have fallen back onto the relay
-    /// -- the state the kill is measured from. Quiet machine: about seven seconds
+    /// -- the state the kill is measured from. The evidence is each agent's own
+    /// record of a probe that gave up, which is a fact the state machine writes
+    /// once, not a reading of `up()`: a machine that starves an agent for longer
+    /// than `UP_WINDOW` (1.5s) makes a live pair *read* as down, and a wait that
+    /// needed four such readings at one instant would be waiting for the
+    /// scheduler rather than for the lab. Quiet machine: about seven seconds
     /// (the design's own `punch_delay` + `punch_window`).
     pub const PUNCHES_EXPIRED: Evidence = Evidence::new(
-        "both punches expired and both pairs back on the relay",
+        "both punches expired and both pairs fell back onto the relay",
         Duration::from_secs(60),
     );
 
-    /// The pair that lost its relay is re-homed onto the survivor and is
-    /// reachable again, which is the whole of what the kill should cost it.
+    /// The relayed path is carrying traffic again on both pairs -- the state the
+    /// kill is measured from. This one *is* a reading of `up()`, deliberately:
+    /// the kill only means anything if the relay was carrying traffic, so the
+    /// scenario waits for the reading rather than assuming it. Quiet machine:
+    /// immediately after the fallback.
+    pub const RELAYS_CARRYING: Evidence = Evidence::new(
+        "both pairs up on the relay after the fallback",
+        Duration::from_secs(90),
+    );
+
+    /// Both ends of the cut pair have acted on their second relay assignment --
+    /// the coordinator has re-homed them, which is the whole of what the kill
+    /// should cost them structurally. A counter each agent keeps, not a sample.
     /// Quiet machine: one to three seconds after the kill.
     pub const CUT_PAIR_REHOMED: Evidence = Evidence::new(
-        "the cut pair re-homed onto the survivor and reachable again",
+        "both ends of the cut pair re-homed onto the survivor",
+        Duration::from_secs(60),
+    );
+
+    /// The re-homed pair is reachable again over the survivor. A separate wait
+    /// from the re-homing, because the two are not the same moment: an agent is
+    /// reachable when its next keepalive lands, and on a loaded machine that is
+    /// later than the assignment it acted on.
+    pub const CUT_PAIR_REACHABLE: Evidence = Evidence::new(
+        "the re-homed pair reachable again on the survivor",
         Duration::from_secs(60),
     );
 }

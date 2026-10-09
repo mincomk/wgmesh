@@ -376,12 +376,24 @@ claims otherwise.
 - The scenarios are wall-clock tests over processes, so they are timing-sensitive
   by nature. The waits in them are polls for *evidence* under a *budget*: each
   returns the moment its condition holds, and the ceiling (60–90s where the
-  sequence itself takes a few seconds) is sized for a machine running the crate's
-  three scenario binaries at once, not for the quiet case. The names and ceilings
-  live in `crates/wgmesh-conformance/src/lab.rs`'s `budget`, and a wait that runs
-  out prints which evidence it was missing and what it had been given. The two
-  claims that must not be sampling artefacts — the cut pair's assignment count
-  and the untouched pair's — are counters, not samples.
+  sequence itself takes a few seconds) is sized for a busy machine rather than for
+  the quiet case. The names and ceilings live in
+  `crates/wgmesh-conformance/src/lab.rs`'s `budget`, and a wait that runs out
+  prints which evidence it was missing and what it had been given. Evidence means
+  the fact the state machine recorded, wherever one exists: the cut pair's
+  assignment count is a counter and not a sample, and since the fleet wait was
+  reworked, so is the fact that wait waits on — a punch that gave up
+  (`fallback_ms`) — because a sampled `up()` is exactly what a loaded machine can
+  take away. A claim that *is* about liveness (the relay carrying traffic before
+  the kill, the re-homing after it, the re-homed pair being reachable again) is
+  waited for in its own right, with its own budget, rather than taken as a reading
+  at one instant.
+- The three scenario binaries do **not** run at once under `cargo test`: cargo
+  runs a crate's test targets one after another, and `cargo test -p
+  wgmesh-conformance` is the sum of its parts (measured: 0.2s + 0.7s + 11.2s +
+  10.3s, 23s total, with the targets' output strictly ordered). They can still be
+  run concurrently by hand, and the budgets are sized for that case, because it is
+  the case in which a wait is most likely to run out.
 
 ---
 
