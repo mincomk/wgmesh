@@ -374,10 +374,14 @@ claims otherwise.
 - The campaign's mapping counts include every mapping the NAT created for the
   internal port, including ones used only during the punch.
 - The scenarios are wall-clock tests over processes, so they are timing-sensitive
-  by nature. Their waits are generous (20–30s where the sequence itself takes a
-  few seconds), and the two claims that must not be sampling artefacts — the
-  cut pair's assignment count and the untouched pair's — are counters, not
-  samples.
+  by nature. The waits in them are polls for *evidence* under a *budget*: each
+  returns the moment its condition holds, and the ceiling (60–90s where the
+  sequence itself takes a few seconds) is sized for a machine running the crate's
+  three scenario binaries at once, not for the quiet case. The names and ceilings
+  live in `crates/wgmesh-conformance/src/lab.rs`'s `budget`, and a wait that runs
+  out prints which evidence it was missing and what it had been given. The two
+  claims that must not be sampling artefacts — the cut pair's assignment count
+  and the untouched pair's — are counters, not samples.
 
 ---
 

@@ -19,6 +19,133 @@ use wgmesh_core::{Path, Phase, TraversalConfig};
 use crate::agent::{Agent, AgentConfig, Snapshot};
 use crate::nat::{Nat, NatMode};
 
+/// How often a wait looks again: fine enough that a wait ends within a tick of
+/// its evidence appearing, coarse enough not to spin.
+const POLL: Duration = Duration::from_millis(25);
+
+/// A wait long enough to be worth a line in the log is worth reporting: below
+/// this a wait is the scenario's own cost, above it the machine is the story.
+const REPORT_AFTER: Duration = Duration::from_secs(5);
+
+/// A wait's two halves: the **evidence** -- what the scenario is waiting to see
+/// -- and the **budget** -- the longest it may take before the wait gives up.
+///
+/// A wait is not a sleep: it polls for a condition the lab itself produces, so
+/// on a quiet machine it returns as soon as the condition holds and the budget
+/// is never approached. The budget exists for the
+/// machine, not for the scenario: `cargo test -p wgmesh-conformance` can be run
+/// with the crate's three scenario binaries at once, each already running its
+/// scenarios on their own threads, and CI runs the whole workspace on a runner
+/// that may be smaller than this one. A budget a loaded machine can exhaust is
+/// the bug this type exists to make impossible; when one does run out, the wait
+/// says so -- which evidence was missing, and how long it was given -- rather
+/// than leaving a reader to guess whether the lab was slow or broken.
+#[derive(Clone, Copy, Debug)]
+pub struct Evidence {
+    /// What the scenario is waiting to see, in the words a timeout prints.
+    pub what: &'static str,
+    /// The longest it may take on the machine the suite happens to be on.
+    pub budget: Duration,
+}
+
+impl Evidence {
+    /// Name a wait: the evidence, and the budget it may spend.
+    pub const fn new(what: &'static str, budget: Duration) -> Self {
+        Self { what, budget }
+    }
+
+    /// When a wait that began at `started` gives up -- for the loops that sample
+    /// on their own cadence rather than through `wait_until`.
+    pub fn deadline_from(self, started: Instant) -> Instant {
+        started + self.budget
+    }
+
+    /// The line a red run is read from when this wait's budget runs out: which
+    /// evidence was missing, and how long it was given.
+    pub fn timeout_line(self, elapsed: Duration) -> String {
+        format!(
+            "lab: timed out after {:.1}s waiting for {self}",
+            elapsed.as_secs_f64()
+        )
+    }
+
+    /// Say so, once, that a wait is over without its evidence.
+    pub fn expired(self, elapsed: Duration) {
+        eprintln!("{}", self.timeout_line(elapsed));
+    }
+}
+
+impl std::fmt::Display for Evidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let secs = self.budget.as_secs_f64();
+        // A whole-second ceiling reads as "90s"; a fractional one keeps its
+        // fraction, because truncating would print a 200ms budget as "0s".
+        if secs.fract() == 0.0 {
+            write!(f, "{} (budget {}s)", self.what, secs as u64)
+        } else {
+            write!(f, "{} (budget {secs:.1}s)", self.what)
+        }
+    }
+}
+
+/// Every wait's ceiling, in one place, so that what a scenario is waiting for and
+/// how long it may take are readable together.
+///
+/// The quiet-machine figures in the comments are this repository's own runs: with
+/// the suite alone on a nine-core box the whole fleet scenario -- a coordinator,
+/// two relays, four agents under two NATs -- settles about eleven seconds end to
+/// end. The budgets are several times the phase they cover, because the point of
+/// a budget is that hitting it means *stuck*, never *busy*.
+pub mod budget {
+    use super::Evidence;
+    use std::time::Duration;
+
+    /// Every named relay has checked in and is healthy. Quiet machine: about a
+    /// second for the two-relay fleet, and it is waited for once per scenario.
+    pub const FLEET_HEALTHY: Evidence =
+        Evidence::new("the relay fleet healthy", Duration::from_secs(90));
+
+    /// Both ends of a pair are up through the relay they were homed on -- the
+    /// first path a scenario needs, and the point at which both agents hold the
+    /// other's observed address. Quiet machine: two or three seconds.
+    pub const RELAYED_SESSION_UP: Evidence = Evidence::new(
+        "both ends of the pair up through the relay",
+        Duration::from_secs(90),
+    );
+
+    /// The punch has resolved, either way: a direct path on both ends, or the
+    /// probe window expiring and the fallback onto the relay. Quiet machine: a
+    /// successful punch lands about eight seconds in, and the fallback is the
+    /// design's own `punch_delay` (2s) + `punch_window` (5s).
+    pub const PUNCH_RESOLVED: Evidence = Evidence::new(
+        "the punch resolved -- a direct path, or the window expiring",
+        Duration::from_secs(90),
+    );
+
+    /// All four agents of a two-pair fleet are up through their relay.
+    /// Quiet machine: about three seconds.
+    pub const PAIRS_UP: Evidence = Evidence::new(
+        "all four agents of both pairs up through their relay",
+        Duration::from_secs(90),
+    );
+
+    /// Both punches have expired and both pairs have fallen back onto the relay
+    /// -- the state the kill is measured from. Quiet machine: about seven seconds
+    /// (the design's own `punch_delay` + `punch_window`).
+    pub const PUNCHES_EXPIRED: Evidence = Evidence::new(
+        "both punches expired and both pairs back on the relay",
+        Duration::from_secs(60),
+    );
+
+    /// The pair that lost its relay is re-homed onto the survivor and is
+    /// reachable again, which is the whole of what the kill should cost it.
+    /// Quiet machine: one to three seconds after the kill.
+    pub const CUT_PAIR_REHOMED: Evidence = Evidence::new(
+        "the cut pair re-homed onto the survivor and reachable again",
+        Duration::from_secs(60),
+    );
+}
+
 /// NAT mapping idle timeout. Longer than any scenario, so a mapping only expires
 /// if a path stops using it.
 pub const NAT_TTL: Duration = Duration::from_secs(10);
@@ -168,16 +295,27 @@ pub struct Duo {
     pub b: Peer,
 }
 
-pub fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
+/// Wait for the evidence, up to its budget. Returns whether it appeared.
+///
+/// A wait that spends more than `REPORT_AFTER` says what it was waiting for and
+/// how long it took, so a machine running close to its budgets leaves a trace
+/// even while the suite is green.
+pub fn wait_until(evidence: Evidence, mut predicate: impl FnMut() -> bool) -> bool {
+    let started = Instant::now();
     loop {
         if predicate() {
+            let elapsed = started.elapsed();
+            if elapsed >= REPORT_AFTER {
+                println!("lab: {evidence} seen after {:.1}s", elapsed.as_secs_f64());
+            }
             return true;
         }
-        if Instant::now() >= deadline {
+        let elapsed = started.elapsed();
+        if elapsed >= evidence.budget {
+            evidence.expired(elapsed);
             return false;
         }
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(POLL);
     }
 }
 
@@ -195,7 +333,7 @@ pub fn spawn_fleet(coordinator: &CoordinatorProcess, ids: &[&str]) -> Vec<RelayP
 /// fleet it expects is actually up -- otherwise the first relay to arrive homes
 /// the pair and the fleet changes under it.
 pub fn wait_for_fleet(coordinator: &CoordinatorProcess, ids: &[&str]) {
-    let ready = wait_until(Duration::from_secs(30), || {
+    let ready = wait_until(budget::FLEET_HEALTHY, || {
         let state = coordinator.state();
         ids.iter().all(|id| {
             state
@@ -204,7 +342,11 @@ pub fn wait_for_fleet(coordinator: &CoordinatorProcess, ids: &[&str]) {
                 .any(|relay| relay.id == *id && relay.healthy)
         })
     });
-    assert!(ready, "lab: the relay fleet never became healthy");
+    assert!(
+        ready,
+        "lab: the relay fleet never became healthy: {} was never seen",
+        budget::FLEET_HEALTHY
+    );
 }
 
 pub fn start_pair(
@@ -334,12 +476,13 @@ pub fn campaign(a_mode: NatMode, b_mode: NatMode) -> CampaignOutcome {
     let duo = start_pair(&coordinator, a_mode, b_mode, DEVICE_A, DEVICE_B);
 
     // (1) both ends must come up relayed, through the relay they were homed on.
-    let relayed = wait_until(Duration::from_secs(30), || {
+    let relayed = wait_until(budget::RELAYED_SESSION_UP, || {
         duo.a.agent.up() && duo.b.agent.up()
     });
     assert!(
         relayed,
-        "the relayed session never came up: A={:?} B={:?}",
+        "the relayed session never came up: {} was never seen; A={:?} B={:?}",
+        budget::RELAYED_SESSION_UP,
         duo.a.agent.snapshot(),
         duo.b.agent.snapshot()
     );
@@ -358,11 +501,14 @@ pub fn campaign(a_mode: NatMode, b_mode: NatMode) -> CampaignOutcome {
     // fire. Either a direct path appears, or the probe window runs out and the
     // state machine falls back to the relay and grows the backoff.
     let mut forwarded_at_fallback: Option<u64> = None;
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let started = Instant::now();
+    let deadline = budget::PUNCH_RESOLVED.deadline_from(started);
+    let mut resolved = false;
     while Instant::now() < deadline {
         let a = duo.a.agent.snapshot();
         let b = duo.b.agent.snapshot();
         if matches!(a.path, Path::Direct) && matches!(b.path, Path::Direct) {
+            resolved = true;
             break;
         }
         // The fallback is read off the agents' own state machines, not off this
@@ -374,9 +520,16 @@ pub fn campaign(a_mode: NatMode, b_mode: NatMode) -> CampaignOutcome {
             // Long enough after the fallback that the relayed path has to have
             // carried traffic again, not merely been scheduled to.
             thread::sleep(Duration::from_millis(2500));
+            resolved = true;
             break;
         }
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(POLL);
+    }
+    // Neither a direct path nor a fallback within the budget: the campaign ends
+    // with whatever the assertions can say about it, and the log says which wait
+    // ran out rather than leaving it to be inferred.
+    if !resolved {
+        budget::PUNCH_RESOLVED.expired(started.elapsed());
     }
 
     let a = duo.a.agent.snapshot();
@@ -448,4 +601,60 @@ pub fn default_traversal() -> TraversalConfig {
 /// Unused import guard: `Phase` is re-exported for tests that match on it.
 pub fn phase_is_probing(phase: Phase) -> bool {
     matches!(phase, Phase::Probing { .. })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A budget is a ceiling, not a sleep: a wait whose evidence never appears
+    /// returns when its budget does -- not much later, and not early.
+    #[test]
+    fn a_wait_that_runs_out_returns_when_its_budget_does() {
+        let budget = Duration::from_millis(200);
+        let evidence = Evidence::new("something that never happens", budget);
+        let started = Instant::now();
+        let seen = wait_until(evidence, || false);
+        let took = started.elapsed();
+        assert!(
+            !seen,
+            "a predicate that never holds must not be reported as seen"
+        );
+        assert!(
+            took >= budget,
+            "the wait gave up before its budget: {took:?} < {budget:?}"
+        );
+        assert!(
+            took < budget + Duration::from_secs(2),
+            "the wait outlived its budget by more than a tick: {took:?}"
+        );
+    }
+
+    /// The line a red run has to be readable from: which evidence was missing,
+    /// and the budget it was given -- so a timeout reads as a sentence about the
+    /// wait rather than as a bare assertion failure.
+    #[test]
+    fn a_timeout_line_names_the_evidence_and_the_budget() {
+        let evidence = budget::CUT_PAIR_REHOMED;
+        let line = evidence.timeout_line(Duration::from_secs(60));
+        assert!(line.contains(evidence.what), "{line}");
+        assert!(line.contains("budget 60s"), "{line}");
+    }
+
+    /// The other half: a wait whose evidence appears ends there, whatever its
+    /// budget says. A wait that always spent its budget would be the sleep this
+    /// crate deliberately does not have.
+    #[test]
+    fn a_wait_that_succeeds_does_not_spend_its_budget() {
+        let started = Instant::now();
+        let seen = wait_until(
+            Evidence::new("a predicate that comes true", Duration::from_secs(60)),
+            || started.elapsed() >= Duration::from_millis(30),
+        );
+        assert!(seen, "the evidence appeared, so the wait must report it");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a wait must end when its evidence appears, not when its budget does"
+        );
+    }
 }

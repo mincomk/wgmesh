@@ -14,10 +14,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use wgmesh_conformance::lab::{
-    CoordinatorProcess, DEVICE_A, DEVICE_B, DEVICE_C, DEVICE_D, relay_forwarded, spawn_fleet,
-    start_pair, wait_until,
+    CoordinatorProcess, DEVICE_A, DEVICE_B, DEVICE_C, DEVICE_D, budget, relay_forwarded,
+    spawn_fleet, start_pair, wait_until,
 };
 use wgmesh_conformance::{NatMode, relay_of};
+
+/// How far apart the outage samples are: this is the unit the gaps below are
+/// counted in, so the assertion's meaning ("never down for more than a sample")
+/// is the interval, not a number that has to be inferred from a sleep.
+const SAMPLE: Duration = Duration::from_millis(100);
 
 #[test]
 fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
@@ -39,12 +44,13 @@ fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
         DEVICE_D,
     );
 
-    let up = wait_until(Duration::from_secs(30), || {
+    let up = wait_until(budget::PAIRS_UP, || {
         ab.a.agent.up() && ab.b.agent.up() && cd.a.agent.up() && cd.b.agent.up()
     });
     assert!(
         up,
-        "both pairs must come up relayed: ab {}/{} cd {}/{}",
+        "both pairs must come up relayed, but {} was never seen: ab {}/{} cd {}/{}",
+        budget::PAIRS_UP,
         ab.a.agent.up(),
         ab.b.agent.up(),
         cd.a.agent.up(),
@@ -65,7 +71,7 @@ fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
 
     // Let both (doomed) punches expire and both pairs settle back on their relay,
     // so what the kill measures is the relay's liveness and nothing else.
-    let settled = wait_until(Duration::from_secs(25), || {
+    let settled = wait_until(budget::PUNCHES_EXPIRED, || {
         ab.a.agent.attempts() >= 1
             && ab.b.agent.attempts() >= 1
             && cd.a.agent.attempts() >= 1
@@ -77,7 +83,9 @@ fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
     });
     assert!(
         settled,
-        "the punch window must expire and fall back to the relay: ab {}/{} cd {}/{}",
+        "the punch window must expire and fall back to the relay, but {} was never seen: \
+         ab {}/{} cd {}/{}",
+        budget::PUNCHES_EXPIRED,
         ab.a.agent.snapshot().attempts,
         ab.b.agent.snapshot().attempts,
         cd.a.agent.snapshot().attempts,
@@ -96,7 +104,9 @@ fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
     let mut ab_longest_gap = 0usize;
     let mut cd_down_run = 0usize;
     let mut cd_longest_gap = 0usize;
-    let deadline = Instant::now() + Duration::from_secs(25);
+    let started = Instant::now();
+    let deadline = budget::CUT_PAIR_REHOMED.deadline_from(started);
+    let mut recovered = false;
     while Instant::now() < deadline {
         let ab_up = ab.a.agent.up() && ab.b.agent.up();
         let cd_up = cd.a.agent.up() && cd.b.agent.up();
@@ -115,9 +125,13 @@ fn a_dead_relay_costs_its_own_pair_only_and_the_pair_recovers_elsewhere() {
         let rehomed =
             ab.a.agent.snapshot().assignments >= 2 && ab.b.agent.snapshot().assignments >= 2;
         if rehomed && ab_up {
+            recovered = true;
             break;
         }
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(SAMPLE);
+    }
+    if !recovered {
+        budget::CUT_PAIR_REHOMED.expired(started.elapsed());
     }
 
     let ab_recovered = ab.a.agent.up() && ab.b.agent.up();
