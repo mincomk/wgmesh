@@ -61,6 +61,11 @@ pub struct DoctorArgs {
     /// yet, and the state file does not carry the bands a peer advertises.
     #[arg(long, value_name = "PATH")]
     pub snapshot: Option<std::path::PathBuf>,
+
+    /// Where the kernel's answers are read from — `/proc/sys` by default. Pointing it at another
+    /// tree is how a test, or a diagnosis of an image, answers for a machine that is not this one.
+    #[arg(long, value_name = "PATH", default_value = "/proc/sys")]
+    pub proc_root: std::path::PathBuf,
 }
 
 #[derive(Debug, Args)]

@@ -15,6 +15,9 @@ use predicates::prelude::*;
 
 const GOOD_SPKI: &str = "9f2cbb9d3b5e1d4a0f7c6e5d4c3b2a1908172635445362718091a2b3c4d5e6f7";
 
+/// What the coordinator's key looks like after it has been replaced.
+const OTHER_SPKI: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
 /// A 32 byte key, base64, the way `wg genkey` writes one.
 const A_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
@@ -547,6 +550,96 @@ fn the_pipeline_enrols_runs_and_reports_each_peer() {
     assert!(peer["handshake_age_secs"].is_number(), "{value}");
 }
 
+/// The pin is the coordinator's identity as this device knows it. A configuration that disagrees
+/// with the state stops the work, and the only thing that moves it is a rotation asked for by name.
+#[test]
+fn trust_rotate_moves_the_pin_and_the_old_one_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = minimal_config(dir.path());
+    write_world(dir.path());
+    let state = state_dir(dir.path());
+
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "join", "--token", "tok"])
+        .assert()
+        .success();
+
+    // Enrolled against the configured pin, the two agree.
+    let view = trust_view(&config);
+    assert_eq!(view["pinned"], GOOD_SPKI, "{view}");
+    assert_eq!(view["configured"], GOOD_SPKI, "{view}");
+    assert_eq!(view["matches"], true, "{view}");
+
+    // The coordinator's key was replaced: the configuration says so and the state still holds the
+    // old one, which is exactly the moment the pin is for.
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[coordinator]\nurl = \"https://wgmesh.example.com\"\nspki_sha256 = \"{OTHER_SPKI}\"\n\n\
+             [state]\ndir = \"{}\"\n",
+            state.display()
+        ),
+    );
+    let view = trust_view(&config);
+    assert_eq!(view["pinned"], GOOD_SPKI, "{view}");
+    assert_eq!(view["configured"], OTHER_SPKI, "{view}");
+    assert_eq!(view["matches"], false, "{view}");
+
+    // Holding the old pin, the agent refuses to run, and it does not rotate the pin for itself.
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pins the coordination-plane key"))
+        .stderr(predicate::str::contains("trust rotate"));
+
+    // The rotation is asked for by name, and then the agent runs.
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "trust", "rotate", "--yes"])
+        .assert()
+        .success();
+
+    let view = trust_view(&config);
+    assert_eq!(view["pinned"], OTHER_SPKI, "{view}");
+    assert_eq!(view["matches"], true, "{view}");
+
+    let mut child = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "run"])
+        .spawn()
+        .expect("the agent starts");
+    // Convergence writes the peer it programmed into the state file, which it can only reach with
+    // the pin agreeing.
+    wait_for(
+        &state.join("state.json"),
+        &|text| text.contains("\"id\": \"8\""),
+        "the daemon to converge under the new pin",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `wgmesh trust show --json`.
+fn trust_view(config: &Path) -> serde_json::Value {
+    let out = bin()
+        .arg("--config")
+        .arg(config)
+        .args(["--backend", "simulated", "trust", "show", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("valid json on stdout")
+}
+
 /// One agent per host: the second refuses to start rather than program the same interface, and a
 /// lock left behind by a process that is gone does not keep the next one out.
 #[test]
@@ -717,5 +810,93 @@ fn doctor_catches_the_routing_misconfigurations_a_snapshot_shows() {
     assert!(
         names.contains(&"routes-needed-but-table-off"),
         "the unmanaged table was not reported: {names:?}"
+    );
+}
+
+/// `--proc-root` lets the forwarding check answer for a machine that is not this
+/// one, which is the only way a test can choose the kernel's answer.
+#[test]
+fn doctor_catches_forwarding_on_with_the_kernel_refusing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[coordinator]\nurl = \"https://wgmesh.example.com\"\nspki_sha256 = \"{GOOD_SPKI}\"\n\n\
+             [state]\ndir = \"{}\"\n\n\
+             [forwarding]\nenabled = true\n",
+            state_dir(dir.path()).display()
+        ),
+    );
+    let proc_root = dir.path().join("proc-sys");
+    std::fs::create_dir_all(proc_root.join("net/ipv4")).expect("the tree is made");
+    std::fs::write(proc_root.join("net/ipv4/ip_forward"), "0\n").expect("the sysctl is written");
+
+    let assertion = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "doctor", "--json"])
+        .arg("--proc-root")
+        .arg(&proc_root)
+        .assert()
+        .failure();
+    let out = assertion.get_output().stdout.clone();
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("valid json on stdout");
+    let names: Vec<&str> = value["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .filter_map(|check| check["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"forwarding-enabled-without-ip-forward"),
+        "forwarding on with the kernel refusing was not reported: {names:?}"
+    );
+}
+
+#[test]
+fn doctor_catches_prefixes_outside_the_coordinators_bands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[coordinator]\nurl = \"https://wgmesh.example.com\"\nspki_sha256 = \"{GOOD_SPKI}\"\n\n\
+             [state]\ndir = \"{}\"\n\n\
+             [route]\nprefixes = [\"10.77.0.0/16\", \"192.168.5.0/24\"]\n",
+            state_dir(dir.path()).display()
+        ),
+    );
+    let snapshot = dir.path().join("snapshot.json");
+    std::fs::write(
+        &snapshot,
+        r#"{
+  "network": {"id": 1, "name": "prod", "cidr": "10.77.0.0/16", "mtu": 1420, "relay_policy": "any"},
+  "me": {"device_id": "d_self", "tunnel_ip": "10.77.0.7/16", "state": "active"},
+  "peers": [
+    {"device_id": "d_b", "name": "B", "wg_pubkey": "AAAA", "tunnel_ip": "10.77.0.8/16",
+     "advertised": [], "state": "active"}
+  ]
+}"#,
+    )
+    .expect("the snapshot is written");
+
+    let assertion = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "doctor", "--json"])
+        .arg("--snapshot")
+        .arg(&snapshot)
+        .assert()
+        .failure();
+    let out = assertion.get_output().stdout.clone();
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("valid json on stdout");
+    let names: Vec<&str> = value["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .filter_map(|check| check["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"prefixes-outside-coordinator-bands"),
+        "a prefix outside the coordinator's bands was not reported: {names:?}"
     );
 }
