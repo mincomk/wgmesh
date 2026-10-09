@@ -1,40 +1,28 @@
-#![allow(clippy::print_stdout)]
+use clap::Parser;
 
-use std::io::{self, Write};
-use std::process::ExitCode;
+use wgmesh_cli::cli::Cli;
+use wgmesh_cli::commands;
 
-use wgmesh_cli::args::{Args, Command};
-use wgmesh_cli::{CliError, commands};
+fn main() -> std::process::ExitCode {
+    let cli = Cli::parse();
+    commands::init_logging(&cli);
 
-fn main() -> ExitCode {
-    let args = match Args::parse(std::env::args()) {
-        Ok(args) => args,
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("wgmesh: {error}");
-            return ExitCode::from(2);
+            eprintln!("wgmesh: could not start the runtime: {error}");
+            return std::process::ExitCode::from(1);
         }
     };
 
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    match dispatch(&args, &mut out) {
-        Ok(()) => {
-            let _ = out.flush();
-            ExitCode::SUCCESS
-        }
+    match runtime.block_on(commands::dispatch(cli)) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            let _ = out.flush();
-            eprintln!("wgmesh: {error}");
-            ExitCode::FAILURE
+            eprintln!("{error}");
+            std::process::ExitCode::from(error.exit_code() as u8)
         }
-    }
-}
-
-fn dispatch(args: &Args, out: &mut dyn Write) -> Result<(), CliError> {
-    match args.command {
-        Command::Peers => commands::peers::run(args, out),
-        Command::RoutesPlan => commands::routes::plan(args, out),
-        Command::RoutesReset => commands::routes::reset(args, out),
-        Command::Doctor => commands::doctor::run(args, out),
     }
 }

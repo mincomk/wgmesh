@@ -119,7 +119,21 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-coordinator",
             "wgmesh-relay",
         ],
-        &["clap", "serde", "serde_json", "tokio", "tracing-subscriber"],
+        // Section 1.1 names `clap`, `tokio` and `tracing-subscriber` for the composition root.
+        // Two of the extra crates here were already the row's before this branch — `serde` and
+        // `serde_json`, because a command's contract is a document it prints. This branch adds
+        // `async-trait`, because the root implements `wgmesh-ports`' asynchronous coordinator port
+        // and the macro has to be nameable where the implementation is, and `tracing`, because the
+        // daemon's loop logs what it could not do.
+        &[
+            "async-trait",
+            "clap",
+            "serde",
+            "serde_json",
+            "tokio",
+            "tracing",
+            "tracing-subscriber",
+        ],
     ),
 ];
 
