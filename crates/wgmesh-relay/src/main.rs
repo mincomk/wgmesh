@@ -246,10 +246,19 @@ fn parse_config(text: &str) -> Result<ParsedConfig, String> {
                     }
                 };
             }
-            ("", "rate_limit_pps_per_slot") | ("relay", "rate_limit_pps_per_slot") => {
+            // The ceiling is written two ways in this project and both are real: the
+            // blueprint's `[limits]` table, which `wgmesh-config` parses
+            // (`RelaySettings.limits`), and this binary's older `rate_limit_*` keys.
+            // Accepting only the second is how a ceiling gets silently ignored — the
+            // catch-all below drops unknown keys without a word.
+            ("", "rate_limit_pps_per_slot")
+            | ("relay", "rate_limit_pps_per_slot")
+            | ("limits", "pps_per_slot") => {
                 relay.pps_per_slot = parse_number(value, number)?;
             }
-            ("", "rate_limit_mbit_per_slot") | ("relay", "rate_limit_mbit_per_slot") => {
+            ("", "rate_limit_mbit_per_slot")
+            | ("relay", "rate_limit_mbit_per_slot")
+            | ("limits", "mbit_per_slot") => {
                 relay.mbit_per_slot = parse_number(value, number)?;
             }
             ("state", "dir") | ("", "state_dir") => {
@@ -689,5 +698,39 @@ fn keyset(flags: &Flags, state_dir: &Path) -> Result<(), String> {
             Ok(())
         }
         Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    /// The ceiling in the file the documentation specifies has to reach the engine.
+    ///
+    /// It did not: this parser knew only `rate_limit_pps_per_slot`, and its catch-all
+    /// drops unknown keys without a word, so `[limits] pps_per_slot = 2` left the slot
+    /// ceiling at its default. Both spellings are accepted now, and this is the test
+    /// that would have caught the difference.
+    #[test]
+    fn the_documented_limits_table_reaches_the_engine_config() {
+        let parsed = parse_config(
+            "[relay]\nlisten = \"127.0.0.1\"\n\n[limits]\npps_per_slot = 2\nmbit_per_slot = 3\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.relay.pps_per_slot, 2);
+        assert_eq!(parsed.relay.mbit_per_slot, 3);
+    }
+
+    /// The older spelling still works: a configuration written before this change must
+    /// keep meaning what it meant.
+    #[test]
+    fn the_older_rate_limit_keys_still_work() {
+        let parsed =
+            parse_config("rate_limit_pps_per_slot = 7\n[relay]\nrate_limit_mbit_per_slot = 9\n")
+                .unwrap();
+        assert_eq!(parsed.relay.pps_per_slot, 7);
+        assert_eq!(parsed.relay.mbit_per_slot, 9);
     }
 }
