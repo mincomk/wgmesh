@@ -733,3 +733,51 @@ impl Reports for Sqlite {
             .collect())
     }
 }
+
+impl Sqlite {
+    /// A cheap number that changes whenever the configuration a node can see
+    /// changes: how many devices there are, how many of each state, how many
+    /// relays, pairs and networks.
+    ///
+    /// It is deliberately a read of the *configuration* rather than a counter
+    /// the daemon keeps in memory. `wgmeshd approve` and `wgmeshd device revoke`
+    /// are separate processes writing this same database, so an in-process
+    /// broadcast would be blind to the changes an operator makes by hand — and
+    /// those are exactly the changes a node must learn about quickly.
+    pub async fn config_version(&self) -> Result<u64, PortError> {
+        let (devices, pending, active, revoked, relays, pairs, networks): (
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+        ) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM devices), \
+                    (SELECT COUNT(*) FROM devices WHERE state = ?1), \
+                    (SELECT COUNT(*) FROM devices WHERE state = ?2), \
+                    (SELECT COUNT(*) FROM devices WHERE state = ?3), \
+                    (SELECT COUNT(*) FROM relays), \
+                    (SELECT COUNT(*) FROM pair_assignments), \
+                    (SELECT COUNT(*) FROM networks)",
+        )
+        .bind(DeviceState::Pending.as_str())
+        .bind(DeviceState::Active.as_str())
+        .bind(DeviceState::Revoked.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage)?;
+
+        // FNV-1a over the tuple: a change in any field changes the number, and
+        // the exact value never leaves the coordinator.
+        let mut version: u64 = 0xcbf2_9ce4_8422_2325;
+        for field in [devices, pending, active, revoked, relays, pairs, networks] {
+            for byte in field.to_le_bytes() {
+                version ^= u64::from(byte);
+                version = version.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        Ok(version)
+    }
+}

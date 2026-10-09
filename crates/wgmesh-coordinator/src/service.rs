@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tokio::sync::broadcast;
+
 use wgmesh_app::coordinator::Clock;
 use wgmesh_app::coordinator::PortError;
 use wgmesh_app::coordinator::ports::{AuditEntry, DeviceState, Directory, Placement, Reports};
@@ -27,6 +29,10 @@ pub struct Services {
     pub join_policy: JoinPolicy,
     pub place_policy: PlacePolicy,
     pub keyset_ttl_secs: u64,
+    /// Announces every configuration change to whoever is streaming. The watch
+    /// that feeds it is started explicitly (`http::watch_config`), so a test can
+    /// start it too rather than depending on a daemon being up.
+    pub updates: broadcast::Sender<u64>,
 }
 
 impl Services {
@@ -38,6 +44,7 @@ impl Services {
             join_policy: JoinPolicy::default(),
             place_policy: PlacePolicy::default(),
             keyset_ttl_secs: 300,
+            updates: broadcast::channel(64).0,
         }
     }
 
