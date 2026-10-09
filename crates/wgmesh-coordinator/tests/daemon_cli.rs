@@ -131,8 +131,12 @@ fn now_ms() -> u64 {
 /// pair moves with nobody calling anything.
 ///
 /// The other tests around this one call the sweep and the watch themselves. This is
-/// the one that says the running daemon starts them at all. That the file's numbers
-/// are the ones the sweep reads is asserted next to the wiring, in `main.rs`.
+/// the one that says the running daemon starts them at all. Which numbers the sweep
+/// then judges a relay by is
+/// [`the_deadline_in_the_settings_file_is_the_one_the_running_daemon_sweeps_by`]'s
+/// question, in this file as well: a pair on a relay that has *never* reported is
+/// quiet under any policy, so this test on its own cannot tell a daemon that read
+/// the file from one that ignored it.
 #[tokio::test]
 async fn the_running_daemon_re_homes_a_pair_without_being_asked() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -252,6 +256,187 @@ async fn the_running_daemon_re_homes_a_pair_without_being_asked() {
         assert!(
             Instant::now() < deadline,
             "the running daemon never re-homed the pair: it is still on {on:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert_ne!(
+        store.config_version().await.expect("version"),
+        before,
+        "the re-homing has to change the version a stream pushes"
+    );
+
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status();
+    let _ = child.wait();
+}
+
+/// The file's own numbers, end to end: the deadline `[relay]` states is the one the
+/// running daemon's sweep judges a relay by.
+///
+/// [`the_running_daemon_re_homes_a_pair_without_being_asked`] says the daemon starts
+/// the sweep at all. It cannot say the sweep reads the file: its pair sits on a relay
+/// that has never reported, `PlacePolicy::is_fresh(None, _)` is false, and that relay
+/// is therefore quiet under *every* policy — including the shipped default a daemon
+/// that never read `[relay]` would build. This test moves the seed into the gap
+/// between the two deadlines, where the answer depends on which policy the daemon
+/// built.
+///
+/// relay-1 last reported four seconds ago. The file's deadline — `heartbeat_timeout_secs
+/// = 1` times `reassign_after_misses = 2` — is two seconds, so relay-1 has gone quiet
+/// and its pair has to move. The shipped default's is five times three, fifteen
+/// seconds, so a daemon that read the numbers and did nothing with them still calls
+/// relay-1 fresh — and relay-1 is the relay the pair is already on, so the sticky rule
+/// in `select_relay` keeps the pair exactly where it is.
+///
+/// The pair is given six seconds. The daemon needs a fraction of that at the file's
+/// pace, which is a sweep every 250ms for a one-second window. The number that matters
+/// is the other side of the gap: a daemon sweeping by the shipped policy would need
+/// eleven seconds before it reached the opposite reading — fifteen seconds of deadline
+/// minus the four the seed is already old — so a daemon that ignored the file cannot
+/// pass this test by being waited on.
+#[tokio::test]
+async fn the_deadline_in_the_settings_file_is_the_one_the_running_daemon_sweeps_by() {
+    /// How far in the past relay-1's last heartbeat is placed: well past the file's
+    /// two-second deadline, and nowhere near the shipped fifteen-second one.
+    const RELAY_1_SILENT_FOR_MS: u64 = 4_000;
+    /// How long the pair is given to move. See the note above: it has to stay under
+    /// the eleven seconds the shipped policy would need.
+    const RE_HOME_BUDGET: Duration = Duration::from_secs(6);
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let database = dir.path().join("coordinator.db");
+    let config = dir.path().join("coordinator.toml");
+    let url = format!("sqlite://{}?mode=rwc", database.display());
+
+    // The fleet as it stands before the daemon starts. Both devices hold a slot on
+    // both relays, so a re-assignment needs no new round trip.
+    let store = Sqlite::open(&url, 4).await.expect("open");
+    store.migrate().await.expect("migrate");
+    let at = Millis::from_millis(now_ms());
+    let network = store
+        .insert_network(&NewNetwork {
+            name: "prod".to_string(),
+            cidr: "10.77.0.0/16".to_string(),
+            mtu: 1420,
+            relay_policy: "any".to_string(),
+            created_at: at,
+        })
+        .await
+        .expect("network")
+        .id;
+    let mut relays: Vec<RelayId> = Vec::new();
+    for (name, host, key) in [
+        ("relay-1", "198.51.100.4", 1_u8),
+        ("relay-2", "198.51.100.5", 2_u8),
+    ] {
+        let relay = store
+            .insert_relay(&NewRelay {
+                name: name.to_string(),
+                api_pubkey: PublicKey::from_bytes([key; 32]),
+                state: RelayState::Active,
+                endpoint_host: host.to_string(),
+                port_range: "51900-51999".to_string(),
+                region: None,
+                provider: None,
+                operator: None,
+                created_at: at,
+            })
+            .await
+            .expect("relay")
+            .id;
+        store
+            .link_relay_network(relay, network)
+            .await
+            .expect("link");
+        relays.push(relay);
+    }
+    let (first, second) = (relays[0], relays[1]);
+    let mut devices: Vec<DeviceId> = Vec::new();
+    for (index, name) in ["a", "b"].into_iter().enumerate() {
+        let device = store
+            .insert_device(&NewDevice {
+                network_id: network,
+                name: name.to_string(),
+                wg_pubkey: PublicKey::from_bytes([7 + index as u8; 32]),
+                api_pubkey: PublicKey::from_bytes([100 + index as u8; 32]),
+                tunnel_ip: format!("10.77.0.{}", 7 + index),
+                state: DeviceState::Active,
+                advertised: Vec::new(),
+                created_at: at,
+            })
+            .await
+            .expect("device")
+            .id;
+        for (relay, base) in [(first, 54_000_u16), (second, 54_100)] {
+            store
+                .assign_slot(relay, device, base + index as u16)
+                .await
+                .expect("slot");
+        }
+        devices.push(device);
+    }
+    let (a, b) = (devices[0], devices[1]);
+    store.assign_pair(a, b, first, at).await.expect("assign");
+
+    // The seed, and the whole point of this test: relay-1 *has* reported, but not
+    // within the deadline the file is about to state. relay-2 has never reported —
+    // nothing has been heard from it — and starts reporting once the daemon is up.
+    store
+        .record_heartbeat(
+            first,
+            Millis::from_millis(now_ms().saturating_sub(RELAY_1_SILENT_FOR_MS)),
+            None,
+        )
+        .await
+        .expect("heartbeat");
+    let before = store.config_version().await.expect("version");
+
+    // One second is the window a heartbeat is given and two misses are what the
+    // operator allows before a relay is gone: a two-second deadline, which the seed
+    // above is already past by four seconds. The shipped default is five and three,
+    // fifteen seconds, which the same seed is comfortably inside.
+    std::fs::write(
+        &config,
+        format!(
+            "[api]\nlisten = \"127.0.0.1:0\"\n\n\
+             [database]\nurl = \"{url}\"\n\n\
+             [relay]\nheartbeat_timeout_secs = 1\nreassign_after_misses = 2\n"
+        ),
+    )
+    .expect("the config is written");
+
+    let mut child: Child = Command::new(env!("CARGO_BIN_EXE_wgmeshd"))
+        .args(["run", "--config"])
+        .arg(&config)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the daemon starts");
+    let _address = wait_for_address(&mut child);
+
+    // From here nothing in this process runs a sweep, a watch or a placement: the
+    // daemon's own timer is the only actor left. All the loop does is keep relay-2
+    // reporting — the way a live relay does, and the way the file's one-second window
+    // expects — and watch where the pair is.
+    let deadline = Instant::now() + RE_HOME_BUDGET;
+    loop {
+        store
+            .record_heartbeat(second, Millis::from_millis(now_ms()), None)
+            .await
+            .expect("heartbeat");
+        let on = store.relay_for_pair(a, b).await.expect("pair");
+        if on == Some(second) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the running daemon did not move the pair off a relay that has been silent \
+             for longer than the file's two-second deadline: the pair is still on \
+             {on:?}. A daemon sweeping by the shipped fifteen-second policy would look \
+             exactly like this."
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
