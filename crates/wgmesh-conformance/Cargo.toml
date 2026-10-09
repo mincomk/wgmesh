@@ -1,0 +1,25 @@
+[package]
+name = "wgmesh-conformance"
+description = "The M0 conformance lab: the relay-to-direct promotion sequence, over real UDP sockets on loopback."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+autobins = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "lab-coordinator"
+path = "src/bin/lab-coordinator.rs"
+
+[[bin]]
+name = "lab-relayd"
+path = "src/bin/lab-relayd.rs"
+
+[dependencies]
+wgmesh-core = { path = "../wgmesh-core" }
+blake2 = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
