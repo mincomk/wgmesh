@@ -21,6 +21,8 @@ wgmesh-app = { path = "../wgmesh-app" }
 wgmesh-config = { path = "../wgmesh-config" }
 wgmesh-state = { path = "../wgmesh-state" }
 wgmesh-secrets = { path = "../wgmesh-secrets" }
+wgmesh-proto = { path = "../wgmesh-proto" }
+wgmesh-client = { path = "../wgmesh-client" }
 
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }

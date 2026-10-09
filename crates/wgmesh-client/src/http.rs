@@ -19,11 +19,11 @@ use wgmesh_ports::{
     ApiError, Class, Clock, ConfigSnapshot, CoordinatorApi, EnrollRequest, Enrollment, Observation,
     PortError, PunchOutcome, PunchReport, RelayAssignment, SecretStore, Spki,
 };
-use wgmesh_proto::api::{
-    AssignmentResponse, ConfigResponse, EndpointBody, ErrorBody, JoinBody, JoinResponse, ObservedIn,
-    PeerBody, PunchBody, RelayEnrollBody, RelayEnrollResponse, RotateBody,
-};
 use wgmesh_proto as naming;
+use wgmesh_proto::api::{
+    AssignmentResponse, ConfigResponse, EndpointBody, ErrorBody, JoinBody, JoinResponse,
+    ObservedIn, PeerBody, PunchBody, RelayEnrollBody, RelayEnrollResponse, RotateBody,
+};
 
 use crate::pin::{PinnedVerifier, client_config};
 
@@ -130,7 +130,9 @@ where
             .use_preconfigured_tls(tls)
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .map_err(|error| PortError::fatal(format!("the HTTPS client did not build: {error}")))?;
+            .map_err(|error| {
+                PortError::fatal(format!("the HTTPS client did not build: {error}"))
+            })?;
         Ok(Self {
             http,
             origin,
@@ -248,7 +250,9 @@ where
         body: &RelayEnrollBody,
     ) -> Result<RelayEnrollResponse, PortError> {
         let bytes = serialize(RELAY_ENROLL_PATH, body)?;
-        let response = self.send(Method::POST, RELAY_ENROLL_PATH, bytes, None).await?;
+        let response = self
+            .send(Method::POST, RELAY_ENROLL_PATH, bytes, None)
+            .await?;
         let answer = ok_bytes(RELAY_ENROLL_PATH, response, Call::Enroll).await?;
         let enrolled: RelayEnrollResponse = deserialize(RELAY_ENROLL_PATH, &answer)?;
         self.remember(enrolled.relay_id.clone());
@@ -259,7 +263,12 @@ where
     pub async fn relay_assignment(&self) -> Result<AssignmentResponse, PortError> {
         let identity = self.signed_identity()?;
         let response = self
-            .send(Method::GET, RELAY_ASSIGNMENT_PATH, Vec::new(), Some(&identity))
+            .send(
+                Method::GET,
+                RELAY_ASSIGNMENT_PATH,
+                Vec::new(),
+                Some(&identity),
+            )
             .await?;
         let answer = ok_bytes(RELAY_ASSIGNMENT_PATH, response, Call::Signed).await?;
         deserialize(RELAY_ASSIGNMENT_PATH, &answer)
@@ -314,8 +323,9 @@ where
     ) -> Result<String, PortError> {
         let timestamp = i64::try_from(self.clock.now().0 / 1000).unwrap_or(i64::MAX);
         let mut seed = [0u8; 16];
-        getrandom::fill(&mut seed)
-            .map_err(|error| PortError::fatal(format!("no randomness for a request nonce: {error}")))?;
+        getrandom::fill(&mut seed).map_err(|error| {
+            PortError::fatal(format!("no randomness for a request nonce: {error}"))
+        })?;
         let nonce = Base64::encode_string(&seed);
         let message = naming::sign::canonical(method, path, body, timestamp, &nonce);
         let signature = self.secrets.sign(&message)?;
@@ -385,7 +395,10 @@ where
     async fn enroll(&self, request: EnrollRequest) -> Result<Enrollment, ApiError> {
         let body = JoinBody {
             token: request.token.as_str().to_string(),
-            name: request.hostname.clone().unwrap_or_else(|| self.name.clone()),
+            name: request
+                .hostname
+                .clone()
+                .unwrap_or_else(|| self.name.clone()),
             wg_pubkey: naming::encode_key(&request.wireguard),
             api_pubkey: naming::encode_key(&request.signer),
             os: None,
@@ -399,12 +412,13 @@ where
                 answer.device_id
             ))
         })?;
-        let tunnel_ip = tunnel_prefix(&answer.tunnel_ip, &answer.network.cidr).ok_or_else(|| {
-            PortError::fatal(format!(
-                "{JOIN_PATH}: the tunnel address `{}` is not an address in `{}`",
-                answer.tunnel_ip, answer.network.cidr
-            ))
-        })?;
+        let tunnel_ip =
+            tunnel_prefix(&answer.tunnel_ip, &answer.network.cidr).ok_or_else(|| {
+                PortError::fatal(format!(
+                    "{JOIN_PATH}: the tunnel address `{}` is not an address in `{}`",
+                    answer.tunnel_ip, answer.network.cidr
+                ))
+            })?;
         let assignment = answer.relay_pool.iter().find_map(|relay| {
             Some(RelayAssignment {
                 relay: naming::parse_relay_id(&relay.relay_id)?,
@@ -498,6 +512,29 @@ where
         self.post_signed(ROTATE_PATH, &serialize(ROTATE_PATH, &body)?)
             .await
     }
+}
+
+/// The pin a coordinator presents, learned by completing a handshake with nothing pinned.
+///
+/// This is `wgmesh pin`: the value it answers is the one a person writes into
+/// `coordinator.spki_sha256`, and they have to see it before they can write it. Nothing else in
+/// this crate reaches a coordinator without a pin — the request that follows this handshake is
+/// answered with `401` and that answer is not read, because the handshake is the whole point of it.
+pub async fn learn_pin(origin: &str) -> Result<Spki, PortError> {
+    let origin = normalize_origin(origin)?;
+    let verifier = Arc::new(PinnedVerifier::learn());
+    let tls = client_config(&verifier)?;
+    let http = reqwest::Client::builder()
+        .use_preconfigured_tls(tls)
+        .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| PortError::fatal(format!("the HTTPS client did not build: {error}")))?;
+    let _ = http.get(format!("{origin}{CONFIG_PATH}")).send().await;
+    verifier.presented().map(Spki::from_bytes).ok_or_else(|| {
+        PortError::transient(format!(
+            "{origin} completed no handshake, so it presented no key to pin"
+        ))
+    })
 }
 
 /// The world, as the port wants it, out of the wire's own answer.
@@ -628,8 +665,9 @@ async fn ok_bytes(
 }
 
 fn serialize<T: serde::Serialize>(path: &str, value: &T) -> Result<Vec<u8>, PortError> {
-    serde_json::to_vec(value)
-        .map_err(|error| PortError::fatal(format!("{path}: the request did not serialize: {error}")))
+    serde_json::to_vec(value).map_err(|error| {
+        PortError::fatal(format!("{path}: the request did not serialize: {error}"))
+    })
 }
 
 fn deserialize<T: serde::de::DeserializeOwned>(path: &str, body: &[u8]) -> Result<T, PortError> {
@@ -670,7 +708,9 @@ fn parse_prefix(text: &str) -> Option<Allowed> {
     let (address, bits) = text.split_once('/')?;
     let bits: u8 = bits.parse().ok()?;
     match address.parse::<std::net::IpAddr>().ok()? {
-        std::net::IpAddr::V4(address) => (bits <= 32).then_some(Allowed::V4(address.octets(), bits)),
+        std::net::IpAddr::V4(address) => {
+            (bits <= 32).then_some(Allowed::V4(address.octets(), bits))
+        }
         std::net::IpAddr::V6(address) => {
             (bits <= 128).then_some(Allowed::V6(address.octets(), bits))
         }
@@ -752,7 +792,10 @@ mod tests {
         );
         assert_eq!(
             tunnel_prefix("fd00::7", "fd00::/64"),
-            Some(Allowed::V6([0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7], 64))
+            Some(Allowed::V6(
+                [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7],
+                64
+            ))
         );
         assert_eq!(tunnel_prefix("10.77.0.7", "not a cidr"), None);
         assert_eq!(tunnel_prefix("10.77.0.7", "fd00::/64"), None);
@@ -770,12 +813,22 @@ mod tests {
         assert!(error.detail().contains("not authenticated"), "{error}");
 
         let refused = status_error(JOIN_PATH, StatusCode::FORBIDDEN, b"", Call::Enroll);
-        assert_eq!(refused.class(), Class::Fatal, "a refused token is not a wait");
+        assert_eq!(
+            refused.class(),
+            Class::Fatal,
+            "a refused token is not a wait"
+        );
         let waiting = status_error(ENDPOINT_PATH, StatusCode::FORBIDDEN, b"", Call::Signed);
         assert_eq!(waiting.class(), Class::Recoverable, "approval is a wait");
 
         assert_eq!(
-            status_error(CONFIG_PATH, StatusCode::TOO_MANY_REQUESTS, b"", Call::Signed).class(),
+            status_error(
+                CONFIG_PATH,
+                StatusCode::TOO_MANY_REQUESTS,
+                b"",
+                Call::Signed
+            )
+            .class(),
             Class::Transient
         );
         assert_eq!(

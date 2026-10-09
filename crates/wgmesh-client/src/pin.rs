@@ -127,24 +127,44 @@ impl fmt::Display for Refusal {
 /// private key behind it. What is deliberately not checked is everything else a PKI would: this
 /// device was told which key to expect when it enrolled, and that is the whole of its trust.
 pub struct PinnedVerifier {
-    pinned: [u8; 32],
+    /// The key this verifier accepts, or `None` when it is learning what is presented.
+    expect: Option<[u8; 32]>,
     provider: Arc<CryptoProvider>,
     refusal: Mutex<Option<Refusal>>,
+    presented: Mutex<Option<[u8; 32]>>,
 }
 
 impl fmt::Debug for PinnedVerifier {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "PinnedVerifier({})", Spki::from_bytes(self.pinned))
+        match self.expect {
+            Some(pin) => write!(formatter, "PinnedVerifier({})", Spki::from_bytes(pin)),
+            None => formatter.write_str("PinnedVerifier(learning)"),
+        }
     }
 }
 
 impl PinnedVerifier {
     /// A verifier for one pin.
     pub fn new(pin: Spki) -> Self {
+        Self::with(Some(*pin.as_bytes()))
+    }
+
+    /// A verifier that accepts whatever the coordinator presents, and remembers it.
+    ///
+    /// This is `wgmesh pin`: a person who has not written a pin into a configuration yet has to
+    /// learn the one the coordinator really presents, and there is nothing to compare it against
+    /// until they do. It is deliberately not reachable from `Coordinator` — a device that was
+    /// already told which key to expect never takes the answer from the network.
+    pub fn learn() -> Self {
+        Self::with(None)
+    }
+
+    fn with(expect: Option<[u8; 32]>) -> Self {
         Self {
-            pinned: *pin.as_bytes(),
+            expect,
             provider: Arc::new(rustls::crypto::ring::default_provider()),
             refusal: Mutex::new(None),
+            presented: Mutex::new(None),
         }
     }
 
@@ -159,6 +179,14 @@ impl PinnedVerifier {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()
+    }
+
+    /// The key the coordinator last presented, whether or not it was accepted.
+    pub fn presented(&self) -> Option<[u8; 32]> {
+        *self
+            .presented
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -176,10 +204,20 @@ impl ServerCertVerifier for PinnedVerifier {
                 "the coordinator presented bytes that are not a DER certificate".to_string(),
             ));
         };
-        if presented != self.pinned {
+        *self
+            .presented
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(presented);
+
+        let expected = match self.expect {
+            // Learning: whatever is presented is the answer, and the caller reads it back.
+            None => return Ok(ServerCertVerified::assertion()),
+            Some(expected) => expected,
+        };
+        if presented != expected {
             let refusal = Refusal {
                 presented,
-                pinned: self.pinned,
+                pinned: expected,
             };
             *self
                 .refusal
@@ -296,7 +334,13 @@ mod tests {
         assert!(spki_sha256(b"").is_none());
         assert!(spki_sha256(&[SEQUENCE]).is_none());
         assert!(spki_sha256(&[SEQUENCE, 0x7f]).is_none());
-        assert!(spki_sha256(&[0x31, 0x00]).is_none(), "a SET is not a certificate");
-        assert!(spki_sha256(&[SEQUENCE, 0x02, 0x30, 0x00]).is_none(), "too few elements");
+        assert!(
+            spki_sha256(&[0x31, 0x00]).is_none(),
+            "a SET is not a certificate"
+        );
+        assert!(
+            spki_sha256(&[SEQUENCE, 0x02, 0x30, 0x00]).is_none(),
+            "too few elements"
+        );
     }
 }

@@ -378,28 +378,3 @@ pub fn non_empty(text: &str) -> Option<&str> {
 pub fn now(clock: &SystemClock) -> u64 {
     clock.now().as_millis() / 1000
 }
-
-/// `wgmesh pin`, which needs a TLS handshake and therefore the HTTPS client.
-///
-/// Learning a pin means completing a handshake and hashing the leaf certificate's SPKI, which is
-/// the client adapter's job. Until that adapter is wired into this build the command says so
-/// rather than printing a pin nobody verified.
-pub fn pin_unavailable(url: &str, json: bool) -> Result<(), CliError> {
-    let message = format!(
-        "cannot pin {url}: learning a pin needs the HTTPS client, which is not wired into this \
-         build"
-    );
-    if json {
-        println!(
-            "{}",
-            crate::output::json(&serde_json::json!({
-                "schema": crate::output::SCHEMA,
-                "url": url,
-                "pin": serde_json::Value::Null,
-                "error": message,
-            }))
-        );
-        return Err(CliError::runtime(message));
-    }
-    Err(CliError::runtime(message))
-}

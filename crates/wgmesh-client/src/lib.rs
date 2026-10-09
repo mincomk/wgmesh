@@ -29,5 +29,5 @@
 pub mod http;
 pub mod pin;
 
-pub use http::{ConfigExchange, Coordinator, DEFAULT_TIMEOUT_SECS};
+pub use http::{ConfigExchange, Coordinator, DEFAULT_TIMEOUT_SECS, learn_pin};
 pub use pin::{PinnedVerifier, client_config, spki_sha256};

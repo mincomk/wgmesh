@@ -278,7 +278,16 @@ pub fn run(settings: &Settings, snapshot: Option<&Snapshot>, sysctl: &dyn Sysctl
 pub fn load_snapshot(path: &Path) -> Result<Snapshot, String> {
     let text =
         std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))
+    read_snapshot(text.as_bytes())
+}
+
+/// Read a snapshot out of the bytes the coordinator answered with.
+///
+/// The same document either way — what `GET /v1/config` answers is what a person captured when
+/// they pointed `--snapshot` at a file — so there is one parser for both.
+pub fn read_snapshot(body: &[u8]) -> Result<Snapshot, String> {
+    serde_json::from_slice(body)
+        .map_err(|error| format!("the snapshot is not the JSON this build expects: {error}"))
 }
 
 /// The whole human-readable report: the routing and forwarding findings, then

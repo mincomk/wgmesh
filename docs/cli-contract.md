@@ -39,7 +39,7 @@ exactly as it reaches every other value.
 | code | when |
 |---|---|
 | `0` | the command did what it was asked |
-| `1` | a runtime failure: no state to show, no device behind the configured backend, a coordinator that cannot be reached, `pin` without the HTTPS client |
+| `1` | a runtime failure: no state to show, no device behind the configured backend, a coordinator that cannot be reached, a `pin` whose handshake produced nothing |
 | `2` | the command line asks for something the binary will not do: `join` with no token anywhere, `key rotate` / `state reset` / `trust rotate` without `--yes`, an unknown flag or subcommand |
 | `3` | the configuration does not validate. **Every** problem is reported in one run, not just the first, and `run` refuses to start |
 
@@ -106,16 +106,24 @@ when `peers.exit_peer` names one — a sixth, `exit peer`. Each carries `status`
 `fail`. A check that `fail`s exits `1` (`doctor found problems`); `warn` does not. NAT diagnosis
 and a routing check are M2's.
 
+The peer-dependent checks need the coordinator's answer — which peers exist, and which bands each
+one advertises — and `doctor` fetches it itself with `GET /v1/config`: the pin comes from
+`coordinator.spki_sha256`, the identity from the state file, and the request is signed with the API
+key, exactly as a converge signs one. `--snapshot PATH` replaces that fetch with a body a person
+captured, for a coordinator this host cannot reach. When neither answers, the checks that need the
+answer are skipped and the reason is reported as a `warn`, never passed silently.
+
 ### What the kernel backend does not do yet
 
 `--backend kernel` is the default, and this build has no adapter behind it: `wgmesh-wireguard`
 carries the routing table, the forwarding sysctls and the firewall, but nothing yet implements the
-`WireGuard` port that programs peers and the `Routes` port, and `wgmesh-client` — the HTTPS
-coordinator — is still a stub. So a command that needs the device (`run`) fails with a message that
-names `--backend simulated`, and commands that only read the configuration or the state
-(`status`, `config`, `key`, `state`, `trust`, `doctor`) answer on either backend. `pin` needs the
-HTTPS client and says so instead of printing a pin nobody verified. Each of those is a refusal
-rather than a pretence, and the message names the thing that is missing.
+`WireGuard` port that programs peers and the `Routes` port. So a command that needs the device
+(`run`) fails with a message that names `--backend simulated`, and `join` and `run` still
+coordinate against the simulated world rather than a real coordinator. The commands that read the
+configuration, the state or the coordinator — `status`, `config`, `key`, `state`, `trust`,
+`doctor` and `pin` — need no device: `doctor` fetches `GET /v1/config` over the pinned connection,
+and `pin` completes a handshake to print the key a coordinator presents. Each refusal names the
+thing that is missing rather than pretending otherwise.
 
 ## The relay's own binary
 
@@ -126,9 +134,14 @@ subcommand:
 wgmesh-relayd [--config PATH] [--state-dir PATH] enroll | run | status | drain | keyset
 ```
 
-`enroll` needs `--coordinator` and `--token`, and refuses rather than registering while the signed
-HTTPS enrollment exchange has no client. `run` serves the assignment in `--assignment-file` (the
-stopgap until `wgmesh-client` fetches `GET /v1/relay/assignment`) and stops on `SIGTERM` or
-`SIGINT`. `status` and `keyset` print what the running relay last wrote to `<state-dir>/status`;
-`drain` writes `<state-dir>/drain` (`--off` clears it) for `ExecReload=`. Its own contract is held
-still by `crates/wgmesh-relay/tests/relayd_cli.rs`.
+`enroll` registers with the coordinator, which is where its identity comes from: it needs
+`--coordinator` (or `[coordinator] url`), `--token`, the pin the coordinator must present
+(`--pin`, or `[coordinator] spki_sha256`; `wgmesh pin <url>` prints one) and the address nodes
+reach the relay at (`--endpoint-host`, or `endpoint_host` in `relay.toml`). It generates the relay
+key if there is none, remembers the relay id the coordinator assigns in `<state-dir>/relay-id`, and
+reads `GET /v1/relay/assignment` over the signed path. `run` fetches the same assignment on
+startup — from the coordinator rather than a file — and stops on `SIGTERM` or `SIGINT`;
+`--assignment-file` serves one from a file instead, for a host that cannot reach the coordinator.
+`status` and `keyset` print what the running relay last wrote to `<state-dir>/status`; `drain`
+writes `<state-dir>/drain` (`--off` clears it) for `ExecReload=`. Its own contract is held still by
+`crates/wgmesh-relay/tests/relayd_cli.rs`.

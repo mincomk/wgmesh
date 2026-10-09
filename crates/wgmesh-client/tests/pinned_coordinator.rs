@@ -140,7 +140,8 @@ impl Harness {
             .await
             .expect("network");
 
-        let relay_signer = FileSecretStore::api(dir.path().join("relay-api"), SecretSource::LoadOrGenerate);
+        let relay_signer =
+            FileSecretStore::api(dir.path().join("relay-api"), SecretSource::LoadOrGenerate);
         let relay = store
             .insert_relay(&NewRelay {
                 name: "relay-1".to_string(),
@@ -214,8 +215,13 @@ fn pinned_client<'a>(
     signer: &'a Signer,
     pin: &str,
 ) -> Coordinator<'a, Signer, PortClock> {
-    Coordinator::new(harness.origin.as_str(), spki(pin), signer, &harness.port_clock)
-        .expect("a client")
+    Coordinator::new(
+        harness.origin.as_str(),
+        spki(pin),
+        signer,
+        &harness.port_clock,
+    )
+    .expect("a client")
 }
 
 /// Enrol through the client, and answer what the coordinator said.
@@ -319,7 +325,20 @@ fn the_pin_is_the_key_openssl_reports() {
     assert_eq!(spki_sha256(&pem_der(SERVER_CERT)), Some(expected));
     let expected: [u8; 32] = *spki(OTHER_PIN).as_bytes();
     assert_eq!(spki_sha256(&pem_der(OTHER_CERT)), Some(expected));
-    assert_ne!(spki_sha256(&pem_der(SERVER_CERT)), spki_sha256(&pem_der(OTHER_CERT)));
+    assert_ne!(
+        spki_sha256(&pem_der(SERVER_CERT)),
+        spki_sha256(&pem_der(OTHER_CERT))
+    );
+}
+
+/// `wgmesh pin`, against the same server: what it learns is what `openssl` reports.
+#[tokio::test]
+async fn learning_a_pin_answers_what_openssl_reports() {
+    let harness = Harness::new().await;
+    let learned = wgmesh_client::learn_pin(&harness.origin)
+        .await
+        .expect("a handshake with nothing pinned");
+    assert_eq!(learned, spki(SERVER_PIN));
 }
 
 // --- (a) a pinned client joins and syncs ------------------------------------
@@ -445,7 +464,11 @@ async fn the_config_etag_round_trips_as_a_304() {
     };
 
     // Naming the version the world still is: no body comes back.
-    match client.exchange_config(Some(&etag)).await.expect("second read") {
+    match client
+        .exchange_config(Some(&etag))
+        .await
+        .expect("second read")
+    {
         ConfigExchange::NotModified { etag: returned } => {
             assert_eq!(returned.as_deref(), Some(etag.as_str()));
         }
@@ -458,7 +481,10 @@ async fn the_config_etag_round_trips_as_a_304() {
 
     // A version the coordinator does not hold is answered with the body.
     assert!(matches!(
-        client.exchange_config(Some("\"stale\"")).await.expect("stale"),
+        client
+            .exchange_config(Some("\"stale\""))
+            .await
+            .expect("stale"),
         ConfigExchange::Fresh { .. }
     ));
 }
@@ -488,7 +514,10 @@ async fn a_relay_enrols_and_fetches_its_assignment_over_the_signed_path() {
         .expect("a relay enrols with a relay token");
     assert_eq!(enrolled.state, "active");
     assert!(enrolled.relay_id.starts_with("relay_"), "{enrolled:?}");
-    assert_eq!(relay.identity().as_deref(), Some(enrolled.relay_id.as_str()));
+    assert_eq!(
+        relay.identity().as_deref(),
+        Some(enrolled.relay_id.as_str())
+    );
 
     // The id enrollment produced is what signs the assignment, which is behind `require_relay`.
     let assignment = relay.relay_assignment().await.expect("the assignment");
