@@ -2242,6 +2242,11 @@ dependencies = [
 name = "wgmesh-cli"
 version = "0.1.0"
 dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml 0.8.23",
  "wgmesh-app",
  "wgmesh-client",
  "wgmesh-config",
