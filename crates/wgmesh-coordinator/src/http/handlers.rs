@@ -200,7 +200,7 @@ pub async fn rotate(
         .store
         .audit(&AuditEntry {
             at: state.services.now(),
-            actor: "device".to_string(),
+            actor: format!("device:{}", naming::device_id(device)),
             action: "device.rotate".to_string(),
             network_id: None,
             device_id: Some(device),
