@@ -20,7 +20,7 @@ pub const STATE_SCHEMA: u32 = 1;
 /// The device remembers, from the moment it first enrolled, which key the coordinator presented.
 /// Every later conversation is checked against it, and a change is refused: someone who can
 /// answer on the coordinator's address should not become the coordinator just because the device
-/// is willing to listen. Rotating the pin is a deliberate act (`wgmesh trust --rotate`) and never
+/// is willing to listen. Rotating the pin is a deliberate act (`wgmesh trust rotate`) and never
 /// the consequence of a failed connection.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Spki([u8; 32]);
