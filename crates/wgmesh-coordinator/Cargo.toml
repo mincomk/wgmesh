@@ -21,6 +21,7 @@ wgmesh-proto = { path = "../wgmesh-proto" }
 wgmesh-config = { path = "../wgmesh-config" }
 wgmesh-state = { path = "../wgmesh-state" }
 wgmesh-secrets = { path = "../wgmesh-secrets" }
+wgmesh-metrics = { path = "../wgmesh-metrics" }
 async-trait = "0.1"
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }

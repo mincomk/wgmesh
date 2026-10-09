@@ -86,6 +86,7 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-config",
             "wgmesh-state",
             "wgmesh-secrets",
+            "wgmesh-metrics",
         ],
         &["axum", "sqlx", "tokio", "tower-http", "async-trait", "clap"],
     ),

@@ -2292,6 +2292,7 @@ dependencies = [
  "wgmesh-app",
  "wgmesh-config",
  "wgmesh-core",
+ "wgmesh-metrics",
  "wgmesh-proto",
  "wgmesh-secrets",
  "wgmesh-state",
