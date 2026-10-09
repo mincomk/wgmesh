@@ -13,7 +13,7 @@ way.
 | | |
 |---|---|
 | Where | `mincomk/wgmesh`, branch `m0/conformance` → pull request **#10** → `main` |
-| Cut from | `main` at `263a8fb`, 2026-10-09 |
+| Cut from | `main` at `2c8987d`, 2026-10-09 |
 | Every command here was run on | the Attacca Computer, 2026-10-09 |
 | CI | GitHub Actions `.github/workflows/ci.yml`, run **37924930042** on pull request #10 |
 
@@ -21,20 +21,20 @@ way.
 
 ## 1. What is in the repository
 
-`main` carries the workspace, its dependency rules and its CI, the NixOS layer,
-and the M0 crates that have landed so far. The rest of M0 is in flight as
-parallel pull requests, so this table says which crate is real **today** and
-where the others are.
+`main` is moving while M0 lands, and this branch was cut from `2c8987d`: the
+table below says what each crate was *then*. Everything M0 is still missing is
+in a pull request of its own.
 
 | Crate | State | Where |
 |---|---|---|
 | `wgmesh-core` | **Real.** mac1 signing and verification, packet classification, candidate ranking, the hole-punch state machine, relay routing, the `AllowedIPs`/`PeerSpec` diff, and route planning that never installs a default route. Pure: no I/O, no clock, no OS. | `main`, 27 unit tests |
 | `wgmesh-ports`, `wgmesh-app` | **Real.** The ports, and the agent use cases that call them. | `main` (PR #11), 10 tests |
-| `wgmesh-config`, `wgmesh-state`, `wgmesh-secrets` | **Real.** Configuration, state documents, the secret store. | `main` (PR #16), 40 + 23 + 29 unit tests |
+| `wgmesh-config`, `wgmesh-state`, `wgmesh-secrets` | **Real.** Configuration, state documents, the secret store. | `main` (PR #16, #17), 41 + 23 + 29 unit tests |
+| `wgmesh-proto` | **Real.** The wire types, the signing preimage and the join token. | `main` (PR #13) |
+| `wgmesh-coordinator` + `wgmeshd` | **Real.** SQLite store with migrations, the service, the HTTP API and the daemon, with its own end-to-end test. | `main` (PR #13) |
 | `wgmesh-wireguard` | Stub | PR #5 (open) |
 | `wgmesh-relay` + `wgmesh-relayd` | Stub | PR #8 (open) |
-| `wgmesh-proto`, `wgmesh-client` | Stub | PR #9 (open) |
-| `wgmesh-coordinator` + `wgmeshd` | Stub | PR #13 (open) |
+| `wgmesh-client` | Stub | PR #9 (open) |
 | `wgmesh-cli` | Stub | PR #14 (open) |
 | `wgmesh-conformance` | **New on this branch.** The M0 gate: the lab, the four scenarios and the two lab processes it drives. | this pull request |
 | `xtask` | `check-deps` (the crate dependency table, enforced) and `check-style` | `main` |
@@ -53,6 +53,7 @@ the build over an undeclared edge.
 |---|---|
 | `crates/wgmesh-conformance` | The lab: the harness, the NAT, the two lab processes, and the four scenarios. |
 | `crates/wgmesh-core` | The state machine's `Event::Handshake` handling **fixed** (§5), plus three unit tests pinning the fixed semantics. |
+| `crates/wgmesh-conformance/src/agent.rs` | The lab agent now measures its own probe window and only reports a *direct* path as degraded (§5). |
 | `wgmesh-M0-report.md` | This document. |
 
 `crates/wgmesh-conformance` also carries the lab's own minimal coordinator and
@@ -90,8 +91,10 @@ including that a default route is never planned.
 In `wgmesh-conformance` the 6 are: pair homing only after both ends name each
 other, the punch armed only once both ends are observed, the fleet spread,
 re-homing on a silent relay, no assignment when no relay is healthy, and a
-source check that the coordinator's own production source constructs no
-UDP socket.
+source check that **no file the coordinator's own process is built from
+constructs a UDP socket** -- scanned over the control plane (the module, its
+transport, its wire types and the binary) with `nat.rs` as a positive control,
+so a scan that reads nothing cannot pass as a clean coordinator.
 
 These run in milliseconds and need nothing from the host.
 
@@ -155,9 +158,15 @@ Each row asserts more than the final path:
 3. **`symmetric + symmetric` never promotes.** The punch runs for `punch_window`
    = 5.0s, the state machine reverts to `Path::Relayed` with `attempts = 1`, and
    the pending backoff is the first table entry (30s, read at 28s remaining) —
-   and the relay's forwarded counter keeps growing, so the relayed path really
-   resumed.
-4. The **mapping counts are the structural reason**: an endpoint-independent
+   and the relay's forwarded counter **grows after the fallback was observed**,
+   so the relayed path really resumed rather than merely having carried traffic
+   before the punch.
+4. The **probe window is measured by the agents, not by the harness**: each end
+   records when its first probe began and when a probe gave up, inside the state
+   machine's own tick, and the campaign reads those two instants off the agent.
+   A descheduled test thread therefore cannot lose the moment -- and cannot
+   report a probe window it never saw.
+5. The **mapping counts are the structural reason**: an endpoint-independent
    mapping is one external port for every destination (A=1, B=1), while a
    symmetric NAT creates a fresh external port per destination (A=2, B=2), which
    is exactly why the address the relay observed is not reachable from the other
@@ -347,7 +356,8 @@ claims otherwise.
 ## 4. What the numbers are not
 
 - The lab runs in **compressed time**: persistent keepalive is 200ms rather than
-  WireGuard's 25s, so a scenario completes in seconds. The state machine's own
+  WireGuard's 25s and a relay that has been silent for 3s is treated as gone
+  (ten missed heartbeats), so a scenario completes in seconds. The state machine's own
   timings (`punch_delay` 2s, `punch_window` 5s, backoff 30s/120s/600s) are the
   design's, unmodified, and a promotion test asserts them.
 - `probe_secs` is measured between the first agent entering the probe and the
@@ -420,6 +430,37 @@ relayed path goes back to carrying traffic.
 pure tests (each transition is individually correct) and not visible in a single
 NAT-pair run (it needs a punch that fails *while* a relayed session is up).
 
+### 5.1 A quiet relay is not a degraded path
+
+The second finding came out of running the scenario rather than reading it, and
+it is the reason this branch touches the lab's agent at all.
+
+The lab's agent declares `Event::Degraded` when the peer has been quiet for
+`DOWN_AFTER` (2s) while the state machine is idle on a known path. Before the
+first punch the state machine *is* idle on a known path — the relay — so a
+relayed session whose keepalives jitter past two seconds, which a loaded machine
+produces, was reported as degraded. `Degraded` reverts to the relay and **arms
+the backoff**, so that reading postponed the *first punch* by the whole first
+backoff (30s). The symmetric scenario then never punched at all: `attempts 1/1`,
+no probe, one NAT mapping, and a `Relayed / Relayed` row that failed on the
+mapping count — which is the row's entire point, since a symmetric NAT is
+proved by the *second* mapping it has to create for the punch.
+
+The lab now treats only a **direct** path as degradable, which is what the
+event means: `wgmesh-core` calls it `degraded_direct_path_reverts_to_the_relay`.
+A quiet relay is the fallback, not a failure.
+
+The flake also moved the measurement: `probe_secs` used to be sampled by the
+harness's polling loop, so a starved thread could lose the probe window and
+report `None` — a failure that says nothing about the state machine. The window
+is now recorded by the agent, in the state machine's own tick, and read from
+there.
+
+Whether the *shipping* agent should behave the same way when a relayed path goes
+quiet — the lab's `DOWN_AFTER` is a lab constant, and the app's event loop has
+its own policy to choose — is an open question for the app step, not something
+this branch settles.
+
 ---
 
 ## 6. Environment
@@ -456,18 +497,16 @@ CI runs the same five commands on a GitHub-hosted runner. The run for the head o
 This branch closes the promotion gate and records the milestone; it does not
 complete M0. Still to land, in the order the milestone lists them:
 
-1. `wgmesh-proto` and `wgmesh-client` — the wire types and the pinned HTTPS
-   client (PR #9), and with them the coordinator's real API. The lab's own
-   control plane stands in until then.
-2. `wgmesh-coordinator` and `wgmesh-relay` as real applications (PR #13, PR #8) —
-   at that point `lab-coordinator` and `lab-relayd` are deleted and the harness
-   is pointed at the binaries the product ships. The scenarios in
-   `crates/wgmesh-conformance/tests/` are that step's acceptance test: they
-   should not change, only the processes they start. The coordinator's
-   no-UDP-socket claim must be re-run against the real `wgmeshd` there.
+1. `wgmesh-client` — the pinned HTTPS client (PR #9). `wgmesh-proto` and the
+   coordinator itself have landed (PR #13), so the lab's own control plane is
+   now the *only* thing standing between the scenarios and the real processes.
+2. `wgmesh-relay` as a real application (PR #8). Then `lab-coordinator` and
+   `lab-relayd` are deleted and the harness is pointed at the binaries the
+   product ships: `wgmeshd` for the control plane and `wgmesh-relayd` for the
+   data plane. The scenarios in `crates/wgmesh-conformance/tests/` are that
+   step's acceptance test — they should not change, only the processes they
+   start. Two claims have to be re-run there, against the real binaries: the
+   coordinator's no-UDP-socket check, and the relay's slot-per-device forwarding.
 3. `wgmesh-wireguard` — the netlink adapter (PR #5), which needs a host with
    `NET_ADMIN` and the `wireguard` module to be tested at all.
 4. `wgmesh-cli` as the composition root (PR #14).
-5. `wgmesh-config`, `wgmesh-state`, `wgmesh-secrets` landed (PR #16) — the
-   coordinator's own persistence, and the config/state/secrets split, are
-   therefore available to the steps above.

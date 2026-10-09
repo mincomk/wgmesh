@@ -128,9 +128,15 @@ fn symmetric_plus_symmetric_stays_relayed_and_backs_off() {
         );
     }
 
-    // The relayed path is live again after the fallback: the relay is forwarding.
+    // The relayed path is live again *after* the fallback: the relay's counter
+    // must grow once the punch has given up, not merely be non-zero from the
+    // relayed session that preceded it.
+    let at_fallback = out
+        .forwarded_at_fallback
+        .expect("the fallback was observed, so the counter was sampled then");
     assert!(
-        out.relay_forwarded > 0,
-        "the fallback must put traffic back on the relay"
+        out.relay_forwarded > at_fallback,
+        "the fallback must put traffic back on the relay: {at_fallback} -> {}",
+        out.relay_forwarded
     );
 }

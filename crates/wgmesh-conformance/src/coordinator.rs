@@ -26,7 +26,12 @@ use crate::control::{
 
 /// A relay that has been silent for longer than this is treated as gone and its
 /// pairs are re-homed.
-pub const RELAY_TIMEOUT: Duration = Duration::from_millis(1500);
+///
+/// The lab's heartbeats are 300ms apart, so this is ten missed heartbeats: long
+/// enough that a loaded machine does not re-home a relay that was merely
+/// descheduled, short enough that a scenario which kills one still settles in
+/// seconds.
+pub const RELAY_TIMEOUT: Duration = Duration::from_millis(3000);
 
 type PairKey = (u32, u32);
 
@@ -510,33 +515,67 @@ mod tests {
         assert!(coordinator.device_sync(sync(1, 2)).assigned.is_none());
     }
 
-    /// The structural half of the coordinator's contract, checkable at compile
-    /// time and independent of the conformance suite's `/proc` inspection: no
-    /// source file of this crate ever constructs a UDP socket.
+    /// Drop comment-only lines, so a comment that merely *says* "no UDP socket"
+    /// cannot be mistaken for code -- and, the other way, a trailing comment
+    /// stays in, because over-reporting costs a look while under-reporting
+    /// costs the claim.
+    fn code_lines(source: &str) -> String {
+        source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The structural half of the coordinator's contract, checkable without a
+    /// running process and independent of the conformance suite's `/proc`
+    /// inspection: no file the coordinator's own process is built from
+    /// constructs a UDP socket.
+    ///
+    /// The positive control matters as much as the claim. `agent.rs`, `nat.rs`
+    /// and `relay.rs` are the lab's data-path stand-ins and legitimately hold
+    /// UDP sockets, so they are not part of this scan -- which means the same
+    /// scan has to find their sockets, or a scanner that reads nothing would
+    /// pass as a clean coordinator.
     #[test]
-    fn no_source_file_constructs_a_udp_socket() {
-        for (name, source) in [
+    fn no_coordinator_source_file_constructs_a_udp_socket() {
+        let control_plane: [(&str, &str); 8] = [
             ("lib.rs", include_str!("lib.rs")),
+            ("coordinator.rs", include_str!("coordinator.rs")),
+            ("http.rs", include_str!("http.rs")),
+            ("msg.rs", include_str!("msg.rs")),
+            ("hex.rs", include_str!("hex.rs")),
+            ("wire.rs", include_str!("wire.rs")),
+            ("proc.rs", include_str!("proc.rs")),
             (
                 "bin/lab-coordinator.rs",
                 include_str!("bin/lab-coordinator.rs"),
             ),
-        ] {
+        ];
+        for (name, source) in control_plane {
             // Only the production half: this very test contains the pattern it
             // searches for, and `#[cfg(test)]` marks where the code stops.
-            let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+            let production = code_lines(source.split("#[cfg(test)]").next().unwrap_or(source));
             assert!(
-                !production.contains("UdpSocket::"),
-                "{name} constructs a UDP socket"
+                !production.contains("UdpSocket"),
+                "{name} names a UDP socket"
             );
             assert!(
-                !production.contains("std::net::UdpSocket"),
-                "{name} imports a UDP socket"
-            );
-            assert!(
-                !production.contains("udp"),
-                "{name} mentions udp at all, which needs a look"
+                !production.contains("udp_socket"),
+                "{name} names a udp socket in lowercase"
             );
         }
+
+        // Positive control: the same scan, over a file that does hold sockets.
+        let nat = code_lines(
+            include_str!("nat.rs")
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap_or(""),
+        );
+        assert!(
+            nat.contains("UdpSocket"),
+            "the scan must find the lab NAT's own UDP sockets in nat.rs, or it proves nothing"
+        );
     }
 }

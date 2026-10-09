@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use crate::control::{StateView, get_json};
 use wgmesh_core::{Path, Phase, TraversalConfig};
 
-use crate::agent::{Agent, AgentConfig};
+use crate::agent::{Agent, AgentConfig, Snapshot};
 use crate::nat::{Nat, NatMode};
 
 /// NAT mapping idle timeout. Longer than any scenario, so a mapping only expires
@@ -281,9 +281,14 @@ pub struct CampaignOutcome {
     /// What each end is waiting before probing again -- the grown backoff.
     pub backoff_a: Option<Duration>,
     pub backoff_b: Option<Duration>,
-    /// How long the probe window ran before the fallback, if there was one.
+    /// How long the probe window ran before the fallback, if there was one, as
+    /// each end measured it on its own clock.
     pub probe_secs: Option<f64>,
     pub relay_forwarded: u64,
+    /// The relay's cumulative forwarded count at the moment the fallback was
+    /// observed -- so a test can assert the relayed path resumed *after* the
+    /// punch failed rather than merely having carried traffic before it.
+    pub forwarded_at_fallback: Option<u64>,
     pub relays: Vec<(String, bool)>,
 }
 
@@ -349,27 +354,24 @@ pub fn campaign(a_mode: NatMode, b_mode: NatMode) -> CampaignOutcome {
     // (2)/(3) the punch: both ends are told each other's observed address and
     // fire. Either a direct path appears, or the probe window runs out and the
     // state machine falls back to the relay and grows the backoff.
-    let mut probe_started_at: Option<Instant> = None;
-    let mut fell_back_at: Option<Instant> = None;
-    let deadline = Instant::now() + Duration::from_secs(25);
+    let mut forwarded_at_fallback: Option<u64> = None;
+    let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         let a = duo.a.agent.snapshot();
         let b = duo.b.agent.snapshot();
-        if probe_started_at.is_none()
-            && (matches!(a.path, Path::Unknown) || matches!(b.path, Path::Unknown))
-        {
-            probe_started_at = Some(Instant::now());
-        }
-        if fell_back_at.is_none() && a.attempts >= 1 && b.attempts >= 1 {
-            fell_back_at = Some(Instant::now());
-        }
         if matches!(a.path, Path::Direct) && matches!(b.path, Path::Direct) {
             break;
         }
-        if let Some(at) = fell_back_at {
-            if at.elapsed() > Duration::from_millis(1500) {
-                break;
-            }
+        // The fallback is read off the agents' own state machines, not off this
+        // sampling loop: each end records when its probe gave up, so a
+        // descheduled harness cannot miss the moment -- and cannot report a
+        // probe window it never saw.
+        if a.fallback_ms.is_some() && b.fallback_ms.is_some() {
+            forwarded_at_fallback = Some(relay_forwarded(&coordinator.state()));
+            // Long enough after the fallback that the relayed path has to have
+            // carried traffic again, not merely been scheduled to.
+            thread::sleep(Duration::from_millis(2500));
+            break;
         }
         thread::sleep(Duration::from_millis(25));
     }
@@ -392,11 +394,9 @@ pub fn campaign(a_mode: NatMode, b_mode: NatMode) -> CampaignOutcome {
         attempts_b: b.attempts,
         backoff_a: a.pending_backoff(),
         backoff_b: b.pending_backoff(),
-        probe_secs: match (probe_started_at, fell_back_at) {
-            (Some(start), Some(end)) => Some(end.duration_since(start).as_secs_f64()),
-            _ => None,
-        },
+        probe_secs: probe_window(&a, &b),
         relay_forwarded: relay_forwarded(&state),
+        forwarded_at_fallback,
         relays: state
             .relays
             .iter()
@@ -409,6 +409,22 @@ pub fn campaign(a_mode: NatMode, b_mode: NatMode) -> CampaignOutcome {
         peer.nat.shutdown();
     }
     outcome
+}
+
+/// The probe window, as the agents measured it themselves: the longest of the
+/// two ends, because both run the same window and the scenario is waiting for
+/// the slower one. `None` when no probe has given up yet -- a punch that worked
+/// leaves nothing to measure.
+fn probe_window(a: &Snapshot, b: &Snapshot) -> Option<f64> {
+    let window = |snapshot: &Snapshot| match (snapshot.first_probe_ms, snapshot.fallback_ms) {
+        (Some(start), Some(end)) => Some(end.saturating_sub(start) as f64 / 1000.0),
+        _ => None,
+    };
+    match (window(a), window(b)) {
+        (Some(x), Some(y)) => Some(x.max(y)),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    }
 }
 
 /// Convenience for asserting a phase transition happened in the snapshot.

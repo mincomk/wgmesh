@@ -69,6 +69,14 @@ pub struct Snapshot {
     pub probing_since_ms: Option<u64>,
     /// When the next probe is due, in agent milliseconds.
     pub next_attempt_ms: Option<u64>,
+    /// When this agent's *first* probe began, on the agent's own clock.
+    ///
+    /// The transitions are recorded where they happen, in the state machine's
+    /// tick, rather than sampled by the harness: a descheduled test thread must
+    /// not be able to make a punch window invisible.
+    pub first_probe_ms: Option<u64>,
+    /// When a probe gave up and the agent fell back to the relay.
+    pub fallback_ms: Option<u64>,
     pub now_ms: u64,
     /// The port this agent currently sends to: the peer's public address on a
     /// direct path, this agent's own relay slot on a relayed one.
@@ -134,6 +142,10 @@ struct Inner {
     relay_slot: Option<u16>,
     observed_fed: bool,
     down_fired: bool,
+    /// The first probe this generation started, and the moment a probe gave up.
+    /// Reset with the generation, so a re-homed pair measures its own punch.
+    first_probe_ms: Option<u64>,
+    fallback_ms: Option<u64>,
     /// A freshly re-pointed peer gets this long to prove itself before a stale
     /// session counts as degraded. A deliberate probe window, followed by the
     /// fallback that re-points at the relay, is not a degradation -- and
@@ -185,6 +197,8 @@ impl Agent {
                 relay_slot: None,
                 observed_fed: false,
                 down_fired: false,
+                first_probe_ms: None,
+                fallback_ms: None,
                 grace_until: None,
                 last_send: None,
                 relays: Vec::new(),
@@ -237,6 +251,8 @@ impl Agent {
             attempts: inner.traversal.attempts,
             probing_since_ms,
             next_attempt_ms,
+            first_probe_ms: inner.first_probe_ms,
+            fallback_ms: inner.fallback_ms,
             now_ms: self.millis(),
             endpoint: inner.peer.endpoint,
             via_relay: inner.peer.via_relay,
@@ -353,15 +369,34 @@ impl Agent {
     /// that was carrying traffic and has gone quiet.
     fn tick(self: &Arc<Self>) {
         let at = Millis::from_millis(self.millis());
+        let at_ms = at.as_millis();
         let mut inner = self.inner.lock().unwrap();
         if inner.assigned_relay.is_none() {
             return;
         }
+        let was_probing = matches!(inner.traversal.phase, Phase::Probing { .. });
+        let attempts_before = inner.traversal.attempts;
         let effects = step(&mut inner.traversal, Event::Tick { at }, &self.cfg);
         self.apply(&mut inner, effects);
 
+        // The probe window, recorded as it happens. A probe in flight at the
+        // start of a tick counts too: the tick interval is the resolution.
+        if inner.first_probe_ms.is_none()
+            && (was_probing || matches!(inner.traversal.phase, Phase::Probing { .. }))
+        {
+            inner.first_probe_ms = Some(at_ms);
+        }
+        if inner.fallback_ms.is_none() && was_probing && inner.traversal.attempts > attempts_before
+        {
+            inner.fallback_ms = Some(at_ms);
+        }
+
         let idle = matches!(inner.traversal.phase, Phase::Idle { .. });
         let known_path = inner.traversal.path != Path::Unknown;
+        // Only a *direct* path can degrade: a quiet relay is the fallback, not a
+        // failure, and calling it one before the first punch would postpone the
+        // punch by a whole backoff.
+        let direct = !inner.peer.via_relay;
         let stale = inner
             .peer
             .last_handshake
@@ -371,7 +406,7 @@ impl Agent {
             .grace_until
             .map(|until| Instant::now() >= until)
             .unwrap_or(true);
-        if idle && known_path && stale && settled && !inner.down_fired {
+        if idle && known_path && direct && stale && settled && !inner.down_fired {
             inner.down_fired = true;
             let effects = step(&mut inner.traversal, Event::Degraded { at }, &self.cfg);
             self.apply(&mut inner, effects);
@@ -447,6 +482,8 @@ impl Agent {
                 inner.assignments += 1;
                 inner.observed_fed = false;
                 inner.down_fired = false;
+                inner.first_probe_ms = None;
+                inner.fallback_ms = None;
                 // The relay may not have reported this slot back to us yet; the
                 // assigned relay's slot is a relayed address by construction.
                 inner.slot_ports.insert(slot.port());
