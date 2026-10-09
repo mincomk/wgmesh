@@ -94,13 +94,28 @@
 
           # Runs `xtask check-deps` over the source: the dependency rules the
           # workspace promises are mechanically enforced, not documented.
-          xtask-deps = pkgs.runCommand "wgmesh-check-deps" {
-            nativeBuildInputs = [ xtask ];
-          } ''
-            cd ${source}
-            xtask check-deps
-            touch $out
-          '';
+          #
+          # It has to run inside a Rust build environment. The xtask shells out
+          # to `cargo metadata`, and a bare runCommand has neither cargo nor the
+          # vendored registry that `cargoLock` sets up -- and a sandbox has no
+          # network to fetch them from. So the check rides along with the build
+          # of the tool it runs.
+          xtask-deps = pkgs.rustPlatform.buildRustPackage {
+            pname = "wgmesh-check-deps";
+            inherit version;
+            src = source;
+            cargoLock.lockFile = ./Cargo.lock;
+            buildAndTestSubdir = "xtask";
+            doCheck = false;
+            postBuild = ''
+              check=$(find "$NIX_BUILD_TOP" -maxdepth 6 -type f -name xtask -perm -u+x 2>/dev/null | head -n1)
+              if [ -z "$check" ]; then
+                echo "error: could not find the built xtask binary" >&2
+                exit 1
+              fi
+              "$check" check-deps
+            '';
+          };
         }
       );
 
