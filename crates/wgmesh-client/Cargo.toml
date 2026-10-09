@@ -13,3 +13,25 @@ workspace = true
 wgmesh-core = { path = "../wgmesh-core" }
 wgmesh-ports = { path = "../wgmesh-ports" }
 wgmesh-proto = { path = "../wgmesh-proto" }
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12", "logging"] }
+sha2 = "0.10"
+base64ct = { version = "1", features = ["alloc"] }
+getrandom = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+
+[dev-dependencies]
+wgmesh-app = { path = "../wgmesh-app" }
+wgmesh-coordinator = { path = "../wgmesh-coordinator" }
+wgmesh-secrets = { path = "../wgmesh-secrets" }
+
+axum = "0.8"
+hyper = "1"
+hyper-util = { version = "0.1", features = ["server-auto", "service", "tokio"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+base64 = "0.22"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
