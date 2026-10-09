@@ -26,6 +26,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
+// Two rows name a crate the blueprint's section 1.1 table does not, because that table
+// lists what each crate is *for* rather than everything a Rust crate needs to do it.
+// `wgmesh-state` declares `serde` because `serde_json` cannot derive a document without
+// it, and `wgmesh-secrets` declares `getrandom` because `rand_core` 0.10 ships no source
+// of operating system randomness -- `OsRng` left that crate in 0.9, and the dalek crates
+// take a `CryptoRng` rather than a byte source.
 // (crate, internal crates it may use, external crates it may use)
 const ALLOWED: &[(&str, &[&str], &[&str])] = &[
     ("wgmesh-core", &[], &["blake2"]),
@@ -39,7 +45,7 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
     (
         "wgmesh-state",
         &["wgmesh-core"],
-        &["serde_json", "tempfile", "rustix"],
+        &["serde", "serde_json", "tempfile", "rustix"],
     ),
     (
         "wgmesh-secrets",
@@ -50,6 +56,7 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "rand_core",
             "zeroize",
             "base64ct",
+            "getrandom",
         ],
     ),
     (

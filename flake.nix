@@ -125,10 +125,14 @@
           pkgs = pkgsFor system;
         in
         {
+          # `pkgs.nixosTest` was removed from nixpkgs (it is a throwing alias
+          # that points at `testers.nixosTest`), so the checks go through
+          # `testers`. It is the same function: a test module evaluated against
+          # this nixpkgs, which is what a check outside nixpkgs wants.
           deps = self.packages.${system}.xtask-deps;
-          e2e = pkgs.nixosTest (import ./nix/tests/e2e.nix { inherit self; });
-          relay-unit = pkgs.nixosTest (import ./nix/tests/relay.nix { inherit self; });
-          forwarding = pkgs.nixosTest (import ./nix/tests/forwarding.nix { inherit self; });
+          e2e = pkgs.testers.nixosTest (import ./nix/tests/e2e.nix { inherit self; });
+          relay-unit = pkgs.testers.nixosTest (import ./nix/tests/relay.nix { inherit self; });
+          forwarding = pkgs.testers.nixosTest (import ./nix/tests/forwarding.nix { inherit self; });
         }
       );
 

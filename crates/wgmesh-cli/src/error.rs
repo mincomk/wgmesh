@@ -1,16 +1,16 @@
 use std::fmt;
 
 use wgmesh_app::{ConvergenceError, RoutingPolicyError};
-use wgmesh_config::RoutingConfigError;
+use wgmesh_config::ConfigError;
 use wgmesh_core::RoutingError;
 use wgmesh_ports::RouteError;
 
 /// Everything the command line can fail at, in one type, so `main` has one place to print.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub enum CliError {
     /// The arguments themselves were wrong; the message carries the usage line.
     Usage(String),
-    Config(RoutingConfigError),
+    Config(ConfigError),
     Policy(RoutingPolicyError),
     Routing(RoutingError),
     Net(RouteError),
@@ -34,8 +34,8 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
-impl From<RoutingConfigError> for CliError {
-    fn from(error: RoutingConfigError) -> Self {
+impl From<ConfigError> for CliError {
+    fn from(error: ConfigError) -> Self {
         CliError::Config(error)
     }
 }

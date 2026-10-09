@@ -1,7 +1,6 @@
 use std::io::Write;
 
 use wgmesh_app::peers_view;
-use wgmesh_config::RoutingConfig;
 use wgmesh_ports::PeerReport;
 
 use crate::CliError;
@@ -20,9 +19,9 @@ use crate::state::StateFile;
 /// The state file carries each peer's own tunnel address and not the bands it advertised, so
 /// `advertised` in this output is what the state knows: the peer's own band.
 pub fn run(args: &Args, out: &mut dyn Write) -> Result<(), CliError> {
-    let config = RoutingConfig::load(&args.config)?;
+    let config = wgmesh_config::load(&args.config)?;
     let state = StateFile::load(&args.state)?;
-    let policy = catch_all(&config.peers);
+    let policy = catch_all(config.peers.allowed_ips, &config.peers.exit_peer);
     let rows = peers_view(&policy, &state.peer_bands()?)?;
 
     if args.json {

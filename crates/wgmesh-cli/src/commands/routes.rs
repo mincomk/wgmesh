@@ -1,7 +1,6 @@
 use std::io::Write;
 
 use wgmesh_app::{desired_routes_of, route_plan_view, unmanaged_plan_view};
-use wgmesh_config::RoutingConfig;
 use wgmesh_core::{RouteSpec, RouteTable};
 use wgmesh_ports::{RouteChangeView, Routes, format_prefix};
 use wgmesh_wireguard::{IpRoutes, ProcessRunner};
@@ -21,7 +20,7 @@ use crate::state::StateFile;
 /// be asked (no `iproute2`, or no privileges) the state file's memory of what we installed is
 /// used instead, and the output says which side it came from.
 pub fn plan(args: &Args, out: &mut dyn Write) -> Result<(), CliError> {
-    let config = RoutingConfig::load(&args.config)?;
+    let config = wgmesh_config::load(&args.config)?;
     let state = StateFile::load(&args.state)?;
     let table = config.route.table.to_core();
     let (network, advertised) = state.advertised_bands()?;
@@ -91,7 +90,7 @@ pub fn plan(args: &Args, out: &mut dyn Write) -> Result<(), CliError> {
 /// The adapter asks the kernel for the routes that carry our marker and deletes exactly what
 /// it gets back, so a route the host put in the same table is not touched.
 pub fn reset(args: &Args, out: &mut dyn Write) -> Result<(), CliError> {
-    let config = RoutingConfig::load(&args.config)?;
+    let config = wgmesh_config::load(&args.config)?;
     let table = config.route.table.to_core();
     let adapter = IpRoutes::new(ProcessRunner, args.interface.clone(), table);
     let removed = adapter.reset()?;

@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use wgmesh_app::{ForwardingObservation, forwarding_checks};
-use wgmesh_config::RoutingConfig;
+use wgmesh_config::FirewallSetting;
 use wgmesh_ports::{ForwardingPolicy, Sysctl};
 use wgmesh_wireguard::{IPV4_FORWARD, IPV6_FORWARD, ProcSysctl, as_flag};
 
@@ -18,7 +18,7 @@ use crate::state::StateFile;
 /// says it without changing anything. The tunables are read from `/proc/sys` so a host that
 /// nothing may be written to can still be diagnosed.
 pub fn run(args: &Args, out: &mut dyn Write) -> Result<(), CliError> {
-    let config = RoutingConfig::load(&args.config)?;
+    let config = wgmesh_config::load(&args.config)?;
     let sysctl = ProcSysctl::new();
     let observed = ForwardingObservation {
         ipv4_forward: sysctl
@@ -33,11 +33,11 @@ pub fn run(args: &Args, out: &mut dyn Write) -> Result<(), CliError> {
     let policy = ForwardingPolicy {
         enabled: config.forwarding.enabled,
         sysctl: config.forwarding.sysctl,
-        manage_firewall: config.forwarding.firewall.is_managed(),
+        manage_firewall: matches!(config.forwarding.firewall, FirewallSetting::Manage),
     };
     let checks = forwarding_checks(policy, observed);
 
-    let catch_all = catch_all(&config.peers);
+    let catch_all = catch_all(config.peers.allowed_ips, &config.peers.exit_peer);
     let peer_note = match &catch_all {
         wgmesh_app::CatchAllPolicy::ExitPeer(name) => {
             format!("the catch-all is programmed for the peer `{name}`")
@@ -53,8 +53,8 @@ pub fn run(args: &Args, out: &mut dyn Write) -> Result<(), CliError> {
     };
     let route_note = format!(
         "table {} prefixes {} metric {}",
-        config.route.table.label(),
-        config.route.prefixes.label(),
+        wgmesh_app::table_label(config.route.table.to_core()),
+        wgmesh_app::prefixes_label(&config.route.prefixes.to_core()),
         config.route.metric().unwrap_or(0)
     );
     let peers_seen = match StateFile::load(&args.state) {

@@ -44,6 +44,9 @@ let
     enable = true;
     package = wgmesh;
     openFirewall = true;
+    # Written by the test script and injected as the `enrollment-token`
+    # credential before the unit is started.
+    enrollmentTokenFile = "/etc/wgmesh/token";
     settings = {
       interface.listen_port = 51820;
       coordinator = {
@@ -63,10 +66,11 @@ let
     {
       imports = [ self.nixosModules.agent ];
 
-      environment.systemPackages = with pkgs; [
+      # The test script runs `wgmesh status --json` from the node's own shell.
+      environment.systemPackages = [ wgmesh ] ++ (with pkgs; [
         jq
         wireguard-tools
-      ];
+      ]);
 
       services.wgmesh.agent = lib.recursiveUpdate agentCommon extra;
 
@@ -82,7 +86,9 @@ in
     router = {
       imports = [ self.nixosModules.coordinator ];
 
-      environment.systemPackages = with pkgs; [ jq ];
+      # `wgmeshd` is driven from this shell: the first network and every join
+      # token are minted here.
+      environment.systemPackages = [ wgmesh ] ++ (with pkgs; [ jq ]);
 
       services.wgmesh.coordinator = {
         enable = true;
@@ -106,11 +112,12 @@ in
     gw = {
       imports = [ self.nixosModules.agent ];
 
-      environment.systemPackages = with pkgs; [
+      # The script inspects this node from its shell: wgmesh, wg, nft, ip.
+      environment.systemPackages = [ wgmesh ] ++ (with pkgs; [
         jq
         nftables
         wireguard-tools
-      ];
+      ]);
 
       services.wgmesh.agent = lib.recursiveUpdate agentCommon {
         settings.forwarding.enabled = true;

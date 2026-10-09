@@ -5,19 +5,20 @@ pub mod routes;
 use std::io::Write;
 
 use wgmesh_app::CatchAllPolicy;
-use wgmesh_config::{AllowedIpsSetting, PeersSection};
+use wgmesh_config::AllowedIpsSetting;
 
 use crate::CliError;
 
 /// The two configuration switches folded into the one policy the plan speaks: a name in
 /// `exit_peer` is more specific than a mode, so it wins.
-pub fn catch_all(peers: &PeersSection) -> CatchAllPolicy {
-    match peers.exit_peer() {
-        Some(name) => CatchAllPolicy::ExitPeer(name.to_owned()),
-        None => match peers.allowed_ips {
-            AllowedIpsSetting::Peer => CatchAllPolicy::Peer,
-            AllowedIpsSetting::Any => CatchAllPolicy::Any,
-        },
+pub fn catch_all(allowed_ips: AllowedIpsSetting, exit_peer: &str) -> CatchAllPolicy {
+    let name = exit_peer.trim();
+    if !name.is_empty() {
+        return CatchAllPolicy::ExitPeer(name.to_owned());
+    }
+    match allowed_ips {
+        AllowedIpsSetting::Peer => CatchAllPolicy::Peer,
+        AllowedIpsSetting::Any => CatchAllPolicy::Any,
     }
 }
 
@@ -31,18 +32,14 @@ mod tests {
 
     #[test]
     fn the_exit_peer_is_more_specific_than_the_mode() {
-        let mut peers = PeersSection::default();
-        assert_eq!(catch_all(&peers), CatchAllPolicy::Peer);
-        peers.allowed_ips = AllowedIpsSetting::Any;
-        assert_eq!(catch_all(&peers), CatchAllPolicy::Any);
-        peers.exit_peer = String::from("gw");
+        assert_eq!(catch_all(AllowedIpsSetting::Peer, ""), CatchAllPolicy::Peer);
+        assert_eq!(catch_all(AllowedIpsSetting::Any, ""), CatchAllPolicy::Any);
         assert_eq!(
-            catch_all(&peers),
+            catch_all(AllowedIpsSetting::Peer, "gw"),
             CatchAllPolicy::ExitPeer(String::from("gw"))
         );
-        peers.exit_peer = String::from("  ");
         assert_eq!(
-            catch_all(&peers),
+            catch_all(AllowedIpsSetting::Any, "  "),
             CatchAllPolicy::Any,
             "blank is not a name"
         );
