@@ -13,3 +13,8 @@ workspace = true
 wgmesh-core = { path = "../wgmesh-core" }
 wgmesh-ports = { path = "../wgmesh-ports" }
 wgmesh-proto = { path = "../wgmesh-proto" }
+base64ct = { version = "1", features = ["alloc"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"

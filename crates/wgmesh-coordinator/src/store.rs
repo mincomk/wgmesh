@@ -156,9 +156,9 @@ impl Store {
             }
             host += 1;
             if host > 65_534 {
-                return Err(sqlx::Error::Protocol(String::from(
+                return Err(StoreError::Sql(sqlx::Error::Protocol(String::from(
                     "the tunnel band has no free address left",
-                )));
+                ))));
             }
         }
     }

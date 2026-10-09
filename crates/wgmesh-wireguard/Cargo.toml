@@ -12,3 +12,12 @@ workspace = true
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
 wgmesh-ports = { path = "../wgmesh-ports" }
+
+[dev-dependencies]
+axum = "0.8"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tower = { version = "0.5", features = ["util"] }
+wgmesh-coordinator = { path = "../wgmesh-coordinator" }
+wgmesh-proto = { path = "../wgmesh-proto" }
+wgmesh-secrets = { path = "../wgmesh-secrets" }

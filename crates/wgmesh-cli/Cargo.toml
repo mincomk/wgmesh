@@ -26,3 +26,9 @@ wgmesh-wireguard = { path = "../wgmesh-wireguard" }
 wgmesh-client = { path = "../wgmesh-client" }
 wgmesh-coordinator = { path = "../wgmesh-coordinator" }
 wgmesh-relay = { path = "../wgmesh-relay" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
