@@ -8,10 +8,8 @@
 // pass as a clean coordinator.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 
-use std::time::Duration;
-
 use wgmesh_conformance::lab::{
-    CoordinatorProcess, DEVICE_A, DEVICE_B, spawn_fleet, start_pair, wait_until,
+    CoordinatorProcess, DEVICE_A, DEVICE_B, budget, spawn_fleet, start_pair, wait_until,
 };
 use wgmesh_conformance::{NatMode, proc};
 
@@ -27,12 +25,14 @@ fn the_coordinator_holds_no_udp_socket() {
         DEVICE_B,
     );
 
-    let up = wait_until(Duration::from_secs(20), || {
+    let up = wait_until(budget::RELAYED_SESSION_UP, || {
         duo.a.agent.up() && duo.b.agent.up()
     });
     assert!(
         up,
-        "the pair has to be talking over the relay before this check means anything"
+        "the pair has to be talking over the relay before this check means anything, \
+         but {} was never seen",
+        budget::RELAYED_SESSION_UP
     );
 
     let coordinator_pid = coordinator.pid();
