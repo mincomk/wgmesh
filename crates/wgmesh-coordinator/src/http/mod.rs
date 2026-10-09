@@ -8,9 +8,12 @@ use axum::body::Body;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 
+use tokio_stream::StreamExt as _;
+use tokio_stream::wrappers::BroadcastStream;
 use wgmesh_app::coordinator::PortError;
 use wgmesh_app::coordinator::ports::{DeviceState, Directory, RelayState};
 use wgmesh_core::rate::{Admission, Metered};
@@ -118,6 +121,13 @@ pub fn router(services: Services) -> Router {
             )),
         )
         .route(
+            "/v1/events",
+            get(events).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_device,
+            )),
+        )
+        .route(
             "/v1/relay/keyset",
             get(handlers::relay_keyset).layer(axum::middleware::from_fn_with_state(
                 state.clone(),
@@ -132,6 +142,54 @@ pub fn router(services: Services) -> Router {
             count_requests,
         ))
         .with_state(state)
+}
+
+/// Watch the configuration and announce every change on the services'
+/// channel, which is what `/v1/events` streams.
+///
+/// The daemon starts this once; a test starts it itself, which is why it is a
+/// function rather than something the router does quietly. The interval is
+/// short because the whole point is to beat the thirty-second poll by a wide
+/// margin, and the query behind it is a handful of counts.
+pub fn watch_config(services: Services) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(500));
+        let mut last: Option<u64> = None;
+        loop {
+            ticker.tick().await;
+            let Ok(version) = services.store.config_version().await else {
+                continue;
+            };
+            if last != Some(version) {
+                last = Some(version);
+                // No subscribers is not an error: it means nobody is streaming.
+                let _ = services.updates.send(version);
+            }
+        }
+    })
+}
+
+/// The push side of config delivery: the current version first, so a client
+/// knows where it stands without a poll, then every change as it happens.
+async fn events(State(state): State<AppState>) -> Response {
+    let current = state.services.store.config_version().await.unwrap_or(0);
+    let receiver = state.services.updates.subscribe();
+    let opening = tokio_stream::once(Ok::<Event, std::convert::Infallible>(event_of(current)));
+    let live = BroadcastStream::new(receiver).filter_map(|message| match message {
+        Ok(version) => Some(Ok(event_of(version))),
+        // A client that fell behind is told to re-read the snapshot rather
+        // than handed a silent gap.
+        Err(_) => Some(Ok(Event::default().event("lagged").data("{}"))),
+    });
+    Sse::new(opening.chain(live))
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+        .into_response()
+}
+
+fn event_of(version: u64) -> Event {
+    Event::default()
+        .event("config")
+        .data(serde_json::json!({ "generation": version }).to_string())
 }
 
 /// Admit one unauthenticated request, or answer `429` with the wait the caller

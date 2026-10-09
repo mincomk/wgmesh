@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -10,7 +11,9 @@ use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
+use wgmesh_app::coordinator::ports::{Directory, NewNetwork};
 use wgmesh_coordinator::clock::FixedClock;
+use wgmesh_coordinator::http::watch_config;
 use wgmesh_coordinator::router;
 use wgmesh_coordinator::service::Services;
 use wgmesh_coordinator::store::Sqlite;
@@ -21,14 +24,15 @@ const NOW_SECS: u64 = 1_760_000_000;
 /// A coordinator with an empty store: the two unauthenticated routes refuse
 /// every request here, which is exactly what a flood looks like from the
 /// limiter's side — it counts before any handler runs.
-async fn harness() -> (Router, tempfile::TempDir) {
+async fn harness() -> (Router, Arc<Sqlite>, Services, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("coordinator.db");
     let url = format!("sqlite://{}?mode=rwc", path.display());
     let store = Arc::new(Sqlite::open(&url, 4).await.expect("open"));
     store.migrate().await.expect("migrate");
     let clock = Arc::new(FixedClock::new(Millis::from_secs(NOW_SECS)));
-    (router(Services::new(store, clock)), dir)
+    let services = Services::new(Arc::clone(&store), clock);
+    (router(services.clone()), store, services, dir)
 }
 
 fn address(last: u8) -> SocketAddr {
@@ -89,7 +93,7 @@ fn parse_exposition(text: &str) -> BTreeMap<String, f64> {
 
 #[tokio::test]
 async fn a_flood_is_refused_with_429_while_another_address_is_untouched() {
-    let (app, _dir) = harness().await;
+    let (app, _store, _services, _dir) = harness().await;
     let flooder = address(1);
 
     for index in 0..30 {
@@ -123,7 +127,7 @@ async fn a_flood_is_refused_with_429_while_another_address_is_untouched() {
 
 #[tokio::test]
 async fn the_metrics_endpoint_renders_text_that_parses() {
-    let (app, _dir) = harness().await;
+    let (app, _store, _services, _dir) = harness().await;
     let flooder = address(3);
     for _ in 0..31 {
         let _ = call(&app, join_request(flooder)).await;
@@ -160,4 +164,56 @@ async fn the_metrics_endpoint_renders_text_that_parses() {
         "the refusal was not counted as a rate limit:\n{body}"
     );
     assert!(body.contains("# TYPE wgmesh_requests_total counter"));
+}
+
+#[tokio::test]
+async fn a_configuration_change_is_announced_within_a_second() {
+    let (app, store, services, _dir) = harness().await;
+    let mut updates = services.updates.subscribe();
+    let watcher = watch_config(services.clone());
+
+    // The watch announces where the configuration stands, so a stream that
+    // opens has something to send immediately.
+    let first = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+        .await
+        .expect("the watch announces the current version")
+        .expect("a version");
+
+    // An operator's change — `wgmeshd bootstrap`, in production — made in
+    // another connection, which is exactly the case an in-process broadcast
+    // would miss.
+    store
+        .insert_network(&NewNetwork {
+            name: "other".to_owned(),
+            cidr: "10.78.0.0/16".to_owned(),
+            mtu: 1420,
+            relay_policy: "any".to_owned(),
+            created_at: Millis::from_secs(NOW_SECS),
+        })
+        .await
+        .expect("the network is stored");
+
+    let before = std::time::Instant::now();
+    let changed = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+        .await
+        .expect("the change is announced")
+        .expect("a version");
+    let elapsed = before.elapsed();
+
+    assert_ne!(first, changed, "the version did not change");
+    assert!(
+        elapsed < Duration::from_secs(30),
+        "the change took {elapsed:?}, which a 30-second poll could have beaten"
+    );
+    watcher.abort();
+
+    // And the stream is a route on the device-authenticated surface: without a
+    // signature it is refused like every other device route.
+    let request = Request::builder()
+        .uri("/v1/events")
+        .extension(ConnectInfo(address(7)))
+        .body(Body::empty())
+        .expect("a well-formed request");
+    let (status, _) = call(&app, request).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

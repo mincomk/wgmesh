@@ -88,7 +88,16 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-secrets",
             "wgmesh-metrics",
         ],
-        &["axum", "sqlx", "tokio", "tower-http", "async-trait", "clap"],
+        &[
+            "axum",
+            "serde_json",
+            "sqlx",
+            "tokio",
+            "tokio-stream",
+            "tower-http",
+            "async-trait",
+            "clap",
+        ],
     ),
     (
         "wgmesh-relay",

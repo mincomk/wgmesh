@@ -187,6 +187,8 @@ async fn run() -> Result<(), String> {
     match cli.command {
         Command::Run { listen } => {
             let services = Services::new(store, clock);
+            // The configuration watch lives as long as the daemon does.
+            let _watch = wgmesh_coordinator::http::watch_config(services.clone());
             let app = router(services);
             let address: SocketAddr = listen.parse().map_err(|error| format!("{error}"))?;
             let listener = TcpListener::bind(address)
