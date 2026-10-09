@@ -57,8 +57,9 @@ pub struct DoctorArgs {
     pub json: bool,
 
     /// A coordinator snapshot — the body of `GET /v1/config` — to check the peers and the bands
-    /// against. Without one the peer-dependent checks cannot run: this build has no HTTPS client
-    /// yet, and the state file does not carry the bands a peer advertises.
+    /// against, in place of the one `doctor` fetches from the coordinator itself. It is for an
+    /// answer that was captured somewhere else, or for a run on a host that cannot reach the
+    /// coordinator at all.
     #[arg(long, value_name = "PATH")]
     pub snapshot: Option<std::path::PathBuf>,
 

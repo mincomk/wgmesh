@@ -101,8 +101,8 @@ pub async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Peers(json) => peers(&cli, json.json),
         Command::Routes(args) => routes(&cli, args),
         Command::Relays(json) => relays(&cli, json.json),
-        Command::Doctor(args) => doctor(&cli, args),
-        Command::Pin(args) => crate::container::pin_unavailable(&args.url, args.json),
+        Command::Doctor(args) => doctor(&cli, args).await,
+        Command::Pin(args) => pin_command(&args.url, args.json).await,
     }
 }
 
@@ -582,7 +582,7 @@ fn relays(cli: &Cli, json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
+async fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
     let (settings, problems) = load(cli)?;
     let checked = settings.clone();
     let exit_peer = settings.peers.exit_peer.clone();
@@ -655,8 +655,11 @@ fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
     // The routing and forwarding checks, over whatever this build can actually see.
     //
     // The peer-dependent half of them needs the coordinator's answer: which peers exist and which
-    // bands they advertise. A `--snapshot` supplies it; without one the checks that need it are
-    // skipped and said to be skipped, rather than passed silently.
+    // bands they advertise. The device fetches that itself, with the pin the configuration names
+    // and the identity the state file holds, so a device that has enrolled needs nothing fetched by
+    // hand — and one that has not is told why the checks were skipped rather than left to produce a
+    // snapshot itself. `--snapshot` remains for the case this cannot cover: reading an answer that
+    // was captured somewhere else.
     let (snapshot, snapshot_note) = match &args.snapshot {
         Some(path) => match crate::doctor::load_snapshot(path) {
             Ok(snapshot) => (Some(snapshot), None),
@@ -665,15 +668,16 @@ fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
                 Some(format!("--snapshot {path:?} could not be read: {error}")),
             ),
         },
-        None => (
-            None,
-            Some(
-                "no --snapshot was given: which peers exist and which bands they advertise come \
-                 from the coordinator, and this build has no HTTPS client, so those checks did \
-                 not run"
-                    .to_string(),
+        None => match fetch_snapshot(&container).await {
+            Ok(snapshot) => (Some(snapshot), None),
+            Err(detail) => (
+                None,
+                Some(format!(
+                    "the coordinator's answer was not fetched, so which peers exist and which \
+                     bands they advertise are unknown: {detail}"
+                )),
             ),
-        ),
+        },
     };
     let sysctl = crate::doctor::ProcSysctl::rooted(&args.proc_root);
     let report = crate::doctor::run(&checked, snapshot.as_ref(), &sysctl);
@@ -738,6 +742,68 @@ fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
     if view.failed() {
         return Err(CliError::runtime("doctor found problems"));
     }
+    Ok(())
+}
+
+/// The coordinator's answer, for a command that would otherwise need a person to fetch one.
+///
+/// The pin comes from the configuration and the identity from the state file, which is what a
+/// device that has already enrolled signs with: nothing here enrols, and nothing here learns a pin.
+/// The body is read rather than the port's snapshot because `doctor` reports on more of it than the
+/// port keeps — the peer names, and the bands each peer advertises rather than the union.
+async fn fetch_snapshot(container: &Container) -> Result<crate::doctor::Snapshot, String> {
+    let settings = container.settings();
+    let url = settings.coordinator.url.trim();
+    if url.is_empty() {
+        return Err("no coordinator.url is configured".to_string());
+    }
+    let pin = container
+        .configured_spki()
+        .map_err(|error| error.to_string())?;
+    let state = container
+        .joined_state()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            "this device has not enrolled yet, so it has no identity to sign a request with"
+                .to_string()
+        })?;
+    let client = wgmesh_client::Coordinator::new(url, pin, container.secrets(), container.clock())
+        .map_err(|error| error.to_string())?
+        .with_identity(wgmesh_proto::device_id(state.device));
+    match client.exchange_config(None).await {
+        Ok(wgmesh_client::ConfigExchange::Fresh { body, .. }) => {
+            crate::doctor::read_snapshot(&body)
+        }
+        Ok(wgmesh_client::ConfigExchange::NotModified { .. }) => {
+            Err("the coordinator answered 304 to a request that carried no version".to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// `wgmesh pin <url>`: the key the coordinator presents, for a person to write down.
+///
+/// It is the one command that completes a handshake with nothing pinned, because answering what
+/// should be pinned is its whole job. Everything else fails closed on a key it was not told to
+/// expect.
+async fn pin_command(url: &str, json: bool) -> Result<(), CliError> {
+    let pin = wgmesh_client::learn_pin(url)
+        .await
+        .map_err(|error| CliError::runtime(error.to_string()))?
+        .to_string();
+    if json {
+        println!(
+            "{}",
+            output::json(&serde_json::json!({
+                "schema": output::SCHEMA,
+                "url": url,
+                "pin": pin,
+                "error": serde_json::Value::Null,
+            }))
+        );
+        return Ok(());
+    }
+    println!("{pin}");
     Ok(())
 }
 

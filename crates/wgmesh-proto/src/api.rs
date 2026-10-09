@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ErrorDetail {
     pub code: String,
     pub message: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ErrorBody {
     pub error: ErrorDetail,
 }
@@ -22,7 +22,7 @@ impl ErrorBody {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JoinBody {
     pub token: String,
     pub name: String,
@@ -36,7 +36,7 @@ pub struct JoinBody {
     pub advertised: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NetworkBody {
     pub id: u32,
     pub name: String,
@@ -45,7 +45,7 @@ pub struct NetworkBody {
     pub relay_policy: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PeerBody {
     pub device_id: String,
     pub name: String,
@@ -57,7 +57,7 @@ pub struct PeerBody {
     pub state: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RelayBody {
     pub relay_id: String,
     pub name: String,
@@ -68,7 +68,7 @@ pub struct RelayBody {
     pub slot_port: Option<u16>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JoinResponse {
     pub device_id: String,
     pub state: String,
@@ -78,13 +78,13 @@ pub struct JoinResponse {
     pub relay_pool: Vec<RelayBody>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SelfObservationBody {
     pub endpoint: String,
     pub seen_at_ms: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MeBody {
     pub device_id: String,
     pub tunnel_ip: String,
@@ -93,7 +93,7 @@ pub struct MeBody {
     pub observed: Option<SelfObservationBody>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RelayViewBody {
     pub assigned: Option<String>,
     pub slots: Vec<RelayBody>,
@@ -101,7 +101,7 @@ pub struct RelayViewBody {
 
 /// The whole of `GET /v1/config`. `etag` is filled from the body's own digest,
 /// so it is empty on the value the digest is taken over.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigResponse {
     pub etag: String,
     pub network: NetworkBody,
@@ -111,7 +111,7 @@ pub struct ConfigResponse {
     pub keepalive_secs: u32,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EndpointBody {
     #[serde(default)]
     pub observed: Option<ObservedIn>,
@@ -120,7 +120,7 @@ pub struct EndpointBody {
     pub advertised: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObservedIn {
     pub ip: String,
     pub port: u16,
@@ -128,18 +128,18 @@ pub struct ObservedIn {
     pub seen_at_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PunchBody {
     pub peer: String,
     pub outcome: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RotateBody {
     pub wg_pubkey: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RelayEnrollBody {
     pub token: String,
     pub name: String,
@@ -157,7 +157,7 @@ pub struct RelayEnrollBody {
     pub networks: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RelayEnrollResponse {
     pub relay_id: String,
     pub name: String,
@@ -167,12 +167,12 @@ pub struct RelayEnrollResponse {
     pub networks: Vec<NetworkBody>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObservationsBody {
     pub observations: Vec<ObservationIn>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObservationIn {
     pub device_id: String,
     pub ip: String,
@@ -181,7 +181,7 @@ pub struct ObservationIn {
     pub seen_at_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HeartbeatBody {
     #[serde(default)]
     pub agent_version: Option<String>,
@@ -192,7 +192,7 @@ pub struct HeartbeatBody {
     pub draining: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrafficIn {
     pub device_id: String,
     pub rx_bytes: u64,
@@ -201,25 +201,25 @@ pub struct TrafficIn {
     pub period_start_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SlotBody {
     pub device_id: String,
     pub udp_port: u16,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PairBody {
     pub a: String,
     pub b: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeysetPeer {
     pub device_id: String,
     pub wg_pubkey: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeysetNetwork {
     pub id: u32,
     pub name: String,
@@ -228,7 +228,7 @@ pub struct KeysetNetwork {
 
 /// What a relay needs to rebuild itself after a restart: its slot table, the
 /// pairs assigned to it, and the keyset of every network it serves.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssignmentResponse {
     pub relay_id: String,
     pub endpoint_host: String,
@@ -237,14 +237,14 @@ pub struct AssignmentResponse {
     pub networks: Vec<KeysetNetwork>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeysetResponse {
     pub fetched_at_ms: u64,
     pub keyset_ttl_secs: u64,
     pub networks: Vec<KeysetNetwork>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Ack {
     pub ok: bool,
 }

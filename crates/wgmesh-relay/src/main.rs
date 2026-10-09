@@ -1,37 +1,44 @@
 #![allow(clippy::print_stdout)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 // The relay daemon. It is its own binary from the first commit on purpose: the relay is
 // a separate deployment unit, a separate systemd service, and the only process that
 // binds the UDP slot ports. Pulling it out of the agent later would cost far more than
 // starting here.
 //
-// What this build can and cannot do is stated plainly rather than faked:
-//   * `enroll` generates the relay key and reaches for the coordinator. With no
-//     coordinator it fails and says why. With one it still stops short of registering,
-//     because the enrollment exchange is a signed HTTPS request and `wgmesh-client` is
-//     not written yet.
-//   * `run` serves an assignment handed to it as a file, or says honestly that it has
-//     no assignment source and serves nothing.
+// What this build does, and does not:
+//   * `enroll` generates the relay key, registers with the coordinator over the pinned HTTPS
+//     connection, remembers the id it is given, and reads `GET /v1/relay/assignment`.
+//   * `run` fetches that assignment from the coordinator on startup and serves it. An assignment
+//     is read once and not re-read: a relay whose pairs move is restarted. `--assignment-file`
+//     serves one from a file instead, for a host that cannot reach the coordinator at all.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::signal::unix::{SignalKind, signal};
-use wgmesh_relay::wgmesh_core::Millis;
+use wgmesh_ports::{Clock, PortError, SecretError, SecretStore, Signature, Spki};
+use wgmesh_proto as naming;
+use wgmesh_proto::api::{AssignmentResponse, RelayEnrollBody};
+use wgmesh_relay::wgmesh_core::{Millis, PublicKey};
 use wgmesh_relay::{
     Assignment, EstablishedSessions, Keyset, KeysetNetwork, KeysetPeer, PairAssignment,
     RelayConfig, RelayEngine, SlotAssignment, UdpSlotSockets, shutdown,
 };
+use wgmesh_secrets::{FileSecretStore, KeyKind, SecretSource};
 
 const DEFAULT_CONFIG: &str = "/etc/wgmesh/relay.toml";
 const DEFAULT_STATE_DIR: &str = "/var/lib/wgmesh";
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The file holding the relay id the coordinator assigned, under the state directory.
+///
+/// It is the relay's own name rather than an assignment: it is what signs every request after
+/// enrollment, and `run` cannot fetch anything without it.
+const RELAY_ID_FILE: &str = "relay-id";
 const USAGE: &str = "\
 wgmesh-relayd - wgmesh relay data plane
 
@@ -39,7 +46,7 @@ USAGE:
     wgmesh-relayd [--config PATH] [--state-dir PATH] <COMMAND> [OPTIONS]
 
 COMMANDS:
-    enroll    Generate the relay key and reach for the coordinator
+    enroll    Generate the relay key, register with the coordinator and read the assignment
     run       Serve the slot sockets and forward between the assigned pairs
     status    Print the running relay's last status snapshot
     drain     Stop taking new pairs and hand over what it is carrying (--off to resume)
@@ -48,17 +55,29 @@ COMMANDS:
 OPTIONS:
     --config PATH          relay.toml to read (default /etc/wgmesh/relay.toml)
     --state-dir PATH       key and status directory (default /var/lib/wgmesh)
-    --coordinator URL      override the coordinator URL
+    --coordinator URL      override the coordinator URL (enroll, run)
+    --pin HEX              the coordinator's SPKI SHA-256, 64 hex (enroll, run)
     --token TOKEN          relay join token (enroll)
+    --endpoint-host HOST   the address nodes reach this relay at (enroll)
+    --name NAME            what this relay is called (enroll)
+    --networks A,B         the networks to serve; empty means every one (enroll)
     --region NAME          region label reported at enroll (enroll)
     --provider NAME        provider label reported at enroll (enroll)
-    --assignment-file PATH serve the assignment in this file (run)
+    --assignment-file PATH serve the assignment in this file instead of fetching one (run)
     --off                  clear the drain request instead of writing it (drain)
     --refresh              ask the running relay to re-read its keyset (keyset)
     -h, --help             print this text
 
-The assignment file is the operator's stopgap until `wgmesh-client` fetches
-GET /v1/relay/assignment over the signed control path. One directive per line:
+The coordinator URL and its pin come from relay.toml ([coordinator] url and
+spki_sha256) when the flags do not name them, which is how the NixOS module
+invokes this binary. A pin is never learned here: without one, the relay refuses
+to connect rather than trusting whatever answers. `wgmesh pin <url>` prints the
+pin a coordinator presents.
+
+`enroll` registers the relay, remembers the id the coordinator assigned in
+<state-dir>/relay-id, and reads `GET /v1/relay/assignment` over the signed path.
+`run` fetches the same assignment from the coordinator on startup. The
+assignment file is the debugging stopgap: one directive per line,
 
     slot <device_id> <port>
     pair <device_a> <device_b>
@@ -95,11 +114,11 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         .value("config")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
-    let (config, file_state_dir) = match read_config(&config_path) {
-        Ok(parsed) => (parsed.relay, parsed.state_dir),
-        // A missing config file is normal before enrollment, and every command except
-        // `run` works from defaults alone; only a malformed file is fatal.
-        Err(ConfigError::Missing) => (RelayConfig::default(), None),
+    // A missing config file is normal before enrollment, and every command except
+    // `run` works from defaults alone; only a malformed file is fatal.
+    let parsed = match read_config(&config_path) {
+        Ok(parsed) => parsed,
+        Err(ConfigError::Missing) => ParsedConfig::default(),
         Err(ConfigError::Invalid(detail)) => return Err(detail),
     };
     // `--state-dir` wins, then the `[state] dir` the NixOS module renders into
@@ -107,12 +126,12 @@ fn dispatch(args: &[String]) -> Result<(), String> {
     let state_dir = flags
         .value("state-dir")
         .map(PathBuf::from)
-        .or(file_state_dir)
+        .or(parsed.state_dir.clone())
         .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
 
     match command.as_str() {
-        "enroll" => enroll(&flags, &config, &state_dir),
-        "run" => serve(&flags, &config, &state_dir),
+        "enroll" => enroll(&flags, &parsed, &state_dir),
+        "run" => serve(&flags, &parsed, &state_dir),
         "status" => status(&state_dir),
         "drain" => drain(&flags, &state_dir),
         "keyset" => keyset(&flags, &state_dir),
@@ -171,9 +190,14 @@ enum ConfigError {
     Invalid(String),
 }
 
+#[derive(Default)]
 struct ParsedConfig {
     relay: RelayConfig,
     state_dir: Option<PathBuf>,
+    /// The key the coordinator is expected to present, as 64 hex characters.
+    spki: Option<String>,
+    /// The address nodes reach this relay at, when the configuration names one.
+    endpoint_host: Option<String>,
 }
 
 fn read_config(path: &Path) -> Result<ParsedConfig, ConfigError> {
@@ -196,6 +220,8 @@ fn read_config(path: &Path) -> Result<ParsedConfig, ConfigError> {
 fn parse_config(text: &str) -> Result<ParsedConfig, String> {
     let mut relay = RelayConfig::default();
     let mut state_dir = None;
+    let mut spki = None;
+    let mut endpoint_host = None;
     let mut section = String::new();
 
     for (index, raw) in text.lines().enumerate() {
@@ -220,7 +246,12 @@ fn parse_config(text: &str) -> Result<ParsedConfig, String> {
             ("", "coordinator") | ("coordinator", "url") => {
                 relay.coordinator = Some(value.to_string());
             }
-            ("", "coordinator_spki_sha256") | ("coordinator", "spki_sha256") => {}
+            ("", "coordinator_spki_sha256") | ("coordinator", "spki_sha256") => {
+                spki = Some(value.to_string());
+            }
+            ("", "endpoint_host") | ("relay", "endpoint_host") => {
+                endpoint_host = Some(value.to_string());
+            }
             ("", "relay_id") | ("relay", "id" | "name" | "relay_id") => {
                 relay.relay_id = value.to_string();
             }
@@ -267,7 +298,12 @@ fn parse_config(text: &str) -> Result<ParsedConfig, String> {
             _ => {}
         }
     }
-    Ok(ParsedConfig { relay, state_dir })
+    Ok(ParsedConfig {
+        relay,
+        state_dir,
+        spki,
+        endpoint_host,
+    })
 }
 
 fn parse_number<T: std::str::FromStr>(value: &str, line: usize) -> Result<T, String> {
@@ -287,7 +323,8 @@ fn parse_range(value: &str, line: usize) -> Result<(u16, u16), String> {
     ))
 }
 
-fn enroll(flags: &Flags, config: &RelayConfig, state_dir: &Path) -> Result<(), String> {
+fn enroll(flags: &Flags, parsed: &ParsedConfig, state_dir: &Path) -> Result<(), String> {
+    let config = &parsed.relay;
     let url = flags
         .value("coordinator")
         .or_else(|| config.coordinator.clone())
@@ -299,74 +336,123 @@ fn enroll(flags: &Flags, config: &RelayConfig, state_dir: &Path) -> Result<(), S
         return Err("enroll needs a non-empty --token".to_string());
     }
 
-    let coordinator = Coordinator::parse(&url)?;
-    let key = state_dir.join("relay.key");
-    let created = ensure_relay_key(&key)?;
+    let key_path = state_dir.join("relay.key");
+    let created = ensure_relay_key(&key_path)?;
     println!(
         "relay key      {} (0600, {})",
-        key.display(),
+        key_path.display(),
         if created { "created" } else { "existing" }
     );
 
-    coordinator
-        .probe(CONNECT_TIMEOUT)
-        .map_err(|detail| format!("coordinator unreachable at {detail}"))?;
+    let pin = pin_of(flags, parsed)?;
+    let key = RelayKey::open(&key_path);
+    let clock = SystemClock;
+    let client = coordinator_client(&url, pin, &key, &clock)?;
+    let api_pubkey = naming::encode_key(&key.public_key().map_err(|error| error.to_string())?);
+    let endpoint_host = flags.value("endpoint-host").or_else(|| parsed.endpoint_host.clone()).ok_or(
+        "enroll needs the address nodes reach this relay at: pass --endpoint-host <host> or set \
+         endpoint_host in relay.toml",
+    )?;
+    let (low, high) = config.port_range;
+    let body = RelayEnrollBody {
+        token,
+        name: flags
+            .value("name")
+            .or_else(|| non_empty(&config.relay_id))
+            .or_else(hostname)
+            .unwrap_or_else(|| "wgmesh-relay".to_string()),
+        api_pubkey,
+        endpoint_host,
+        port_range: format!("{low}-{high}"),
+        region: flags.value("region").and_then(|value| non_empty(&value)),
+        provider: flags.value("provider").and_then(|value| non_empty(&value)),
+        operator: None,
+        networks: flags.value("networks").map(networks_of).unwrap_or_default(),
+    };
 
-    Err(format!(
-        "coordinator {} answered on tcp/{} but the enrollment exchange is a signed HTTPS request \
-         and `wgmesh-client` is not written yet. Nothing was registered, no pin was written, and \
-         the relay key was left untouched.",
-        coordinator.url, coordinator.port
-    ))
-}
+    let runtime = runtime()?;
+    let enrolled = runtime
+        .block_on(async { client.relay_enroll(&body).await })
+        .map_err(|error| coordinator_error(&url, &error))?;
 
-struct Coordinator {
-    url: String,
-    host: String,
-    port: u16,
-}
-
-impl Coordinator {
-    fn parse(url: &str) -> Result<Self, String> {
-        let (scheme, rest) = url
-            .split_once("://")
-            .ok_or_else(|| format!("{url}: expected an https:// URL"))?;
-        let default_port = match scheme {
-            "https" => 443,
-            "http" => 80,
-            other => return Err(format!("{url}: unsupported scheme `{other}`")),
-        };
-        let rest = rest.trim_end_matches('/');
-        let (host, port) = match rest.rsplit_once(':') {
-            Some((host, port)) if !host.contains(':') => (
-                host.to_string(),
-                port.parse()
-                    .map_err(|_| format!("{url}: `{port}` is not a port"))?,
-            ),
-            _ => (rest.to_string(), default_port),
-        };
-        if host.is_empty() {
-            return Err(format!("{url}: missing host"));
-        }
-        Ok(Self {
-            url: url.to_string(),
-            host,
-            port,
-        })
+    println!("relay id       {}", enrolled.relay_id);
+    println!("relay name     {}", enrolled.name);
+    println!("state          {}", enrolled.state);
+    println!(
+        "endpoint       {} ports {}",
+        enrolled.endpoint_host, enrolled.port_range
+    );
+    for network in &enrolled.networks {
+        println!("network        {} {}", network.name, network.cidr);
+    }
+    if enrolled.state != "active" {
+        println!(
+            "this relay is not active yet: the coordinator has to approve it before it serves \
+             anything"
+        );
     }
 
-    fn probe(&self, timeout: Duration) -> Result<(), String> {
-        let target = format!("{}:{}", self.host, self.port);
-        let addresses: Vec<std::net::SocketAddr> =
-            std::net::ToSocketAddrs::to_socket_addrs(&target)
-                .map_err(|error| format!("{}: {error}", self.url))?
-                .collect();
-        let first = addresses
-            .first()
-            .ok_or_else(|| format!("{}: resolved to no address", self.url))?;
-        TcpStream::connect_timeout(first, timeout)
-            .map(|_| ())
-            .map_err(|error| format!("{}: {error}", self.url))
+    // The id signs every later request, so it is written down before the assignment is asked for:
+    // an assignment that cannot be read now must not cost a second join token.
+    let id_file = state_dir.join(RELAY_ID_FILE);
+    fs::write(&id_file, format!("{}\n", enrolled.relay_id))
+        .map_err(|error| format!("{}: {error}", id_file.display()))?;
+    println!("relay id file  {}", id_file.display());
+
+    match runtime.block_on(async { client.relay_assignment().await }) {
+        Ok(assignment) => {
+            println!(
+                "assignment     {} slots, {} pairs, {} keyed devices",
+                assignment.slots.len(),
+                assignment.pairs.len(),
+                assignment
+                    .networks
+                    .iter()
+                    .map(|network| network.peers.len())
+                    .sum::<usize>()
+            );
+            Ok(())
+        }
+        // The enrollment stands, and `run` asks again: only the assignment could not be read.
+        Err(error) => Err(format!("the assignment was not read: {error}")),
+    }
+}
+
+/// The HTTPS client for one coordinator, built from what the flags and the file name.
+fn coordinator_client<'a>(
+    url: &str,
+    pin: Spki,
+    key: &'a RelayKey,
+    clock: &'a SystemClock,
+) -> Result<wgmesh_client::Coordinator<'a, RelayKey, SystemClock>, String> {
+    wgmesh_client::Coordinator::new(url, pin, key, clock).map_err(|error| error.to_string())
+}
+
+/// The key the coordinator must present, from `--pin` or the configuration.
+///
+/// A pin is never learned here. A relay that accepted whatever answered would be a relay an
+/// interposer could point anywhere, and the coordinator is what hands out the pairs it forwards.
+fn pin_of(flags: &Flags, parsed: &ParsedConfig) -> Result<Spki, String> {
+    let Some(text) = flags.value("pin").or_else(|| parsed.spki.clone()) else {
+        return Err(
+            "the coordinator's pin is required: pass --pin <64 hex> or set \
+             coordinator_spki_sha256 in relay.toml (`wgmesh pin <url>` prints it)"
+                .to_string(),
+        );
+    };
+    parse_spki(&text).map_err(|error| format!("coordinator_spki_sha256: {error}"))
+}
+
+/// What a failed call to the coordinator means to an operator.
+///
+/// A coordinator that cannot be reached is the common case and reads better as itself, but the
+/// class is the client's: a `429` or a `503` is transient too, and the message says so rather than
+/// claiming nothing answered. A refused token or a wrong pin keeps the message it was given.
+fn coordinator_error(url: &str, error: &PortError) -> String {
+    if error.class() == wgmesh_ports::Class::Transient {
+        format!("coordinator unreachable or refusing at {url}: {error}")
+    } else {
+        error.to_string()
     }
 }
 
@@ -402,11 +488,21 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn serve(flags: &Flags, config: &RelayConfig, state_dir: &Path) -> Result<(), String> {
+fn serve(flags: &Flags, parsed: &ParsedConfig, state_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(state_dir).map_err(|error| format!("{}: {error}", state_dir.display()))?;
+
+    // The id the coordinator assigned is what this relay is called, and it is what the engine
+    // reports in its status snapshot and its heartbeats. `relay.toml` is the operator's file and
+    // carries no id — nothing generates one but enrollment — so the file enrollment wrote fills it
+    // in. Without this a relay signs its requests as `relay_…` and reports an empty name.
+    let mut config = parsed.relay.clone();
+    if let Some(identity) = relay_id_of(state_dir) {
+        config.relay_id = identity;
+    }
 
     let sockets = UdpSlotSockets::new(config.listen);
     let mut engine = RelayEngine::new(sockets, config.clone());
+    let runtime = runtime()?;
 
     match flags.value("assignment-file") {
         Some(path) => {
@@ -425,21 +521,31 @@ fn serve(flags: &Flags, config: &RelayConfig, state_dir: &Path) -> Result<(), St
                 engine.pairs().len()
             );
         }
-        None => println!(
-            "wgmesh-relayd: no assignment source. `wgmesh-client` is not written yet, so nothing is \
-             fetched from {}. Serving nothing until an assignment arrives; pass --assignment-file \
-             to serve one now.",
-            config
-                .coordinator
-                .as_deref()
-                .unwrap_or("<no coordinator configured>")
-        ),
+        // The assignment comes from the coordinator, which is the only thing that knows which
+        // pairs this relay carries and which keys they are reached by.
+        None => match runtime.block_on(fetch_assignment(flags, parsed, state_dir)) {
+            Ok(assignment) => {
+                engine
+                    .on_assignment(assignment, Millis::ZERO)
+                    .map_err(|error| error.to_string())?;
+                println!(
+                    "wgmesh-relayd {} serving {} slots, {} pairs",
+                    engine.config().relay_id,
+                    engine.slots().len(),
+                    engine.pairs().len()
+                );
+            }
+            Err(detail) => println!(
+                "wgmesh-relayd: no assignment was fetched from {}: {detail} It will not look \
+                 again: restart this relay once the coordinator answers, or pass \
+                 --assignment-file to serve one from a file.",
+                flags
+                    .value("coordinator")
+                    .or_else(|| config.coordinator.clone())
+                    .unwrap_or_else(|| "<no coordinator configured>".to_string())
+            ),
+        },
     }
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("tokio runtime: {error}"))?;
 
     runtime.block_on(async move {
         let (handle, shutdown) = shutdown();
@@ -575,8 +681,8 @@ fn render_status(engine: &RelayEngine<UdpSlotSockets>, at: Millis) -> String {
     lines.join("\n")
 }
 
-// The stopgap assignment file. `GET /v1/relay/assignment` carries the same three things
-// as typed wire values once `wgmesh-proto` and `wgmesh-client` exist.
+// The stopgap assignment file. `GET /v1/relay/assignment` carries the same three things as typed
+// wire values, and is where `run` reads them from unless this file names them instead.
 fn parse_assignment(text: &str) -> Result<Assignment, String> {
     let mut slots = Vec::new();
     let mut pairs = Vec::new();
@@ -701,11 +807,300 @@ fn keyset(flags: &Flags, state_dir: &Path) -> Result<(), String> {
     }
 }
 
+/// A runtime for the calls that are asynchronous, and the same one the relay serves on.
+fn runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("tokio runtime: {error}"))
+}
+
+/// The relay's identity, as the client's `SecretStore` port wants it.
+///
+/// The relay holds one Ed25519 key, in the file `enroll` generates, and this is the only thing
+/// that reads it: the client asks for a public half or a signature, never for the key itself.
+struct RelayKey {
+    store: FileSecretStore,
+}
+
+impl RelayKey {
+    fn open(path: &Path) -> Self {
+        Self {
+            store: FileSecretStore::at(path, KeyKind::Ed25519, SecretSource::RequireExisting),
+        }
+    }
+}
+
+impl SecretStore for RelayKey {
+    fn wireguard_public_key(&self) -> Result<PublicKey, SecretError> {
+        self.public_key()
+    }
+
+    fn public_key(&self) -> Result<PublicKey, SecretError> {
+        let bytes = self
+            .store
+            .public_key()
+            .map_err(|error| SecretError::fatal(error.to_string()))?;
+        Ok(PublicKey::from_bytes(bytes))
+    }
+
+    fn sign(&self, message: &[u8]) -> Result<Signature, SecretError> {
+        let signature = self
+            .store
+            .sign(message)
+            .map_err(|error| SecretError::fatal(error.to_string()))?;
+        Ok(Signature::from_bytes(signature))
+    }
+}
+
+/// The wall clock, as the client's `Clock` port wants it.
+struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Millis {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_millis() as u64)
+            .unwrap_or(0);
+        Millis::from_millis(millis)
+    }
+}
+
+/// The assignment `GET /v1/relay/assignment` answers, as the engine wants it.
+///
+/// The two sides spell a device id the same way and hold the same key, so this is a translation
+/// rather than a decision: nothing here is allowed to guess, and anything it cannot read is a
+/// failure rather than a silently empty assignment.
+fn assignment_of(response: &AssignmentResponse) -> Result<Assignment, String> {
+    let device = |text: &str| {
+        naming::parse_device_id(text).ok_or_else(|| format!("`{text}` is not a device id"))
+    };
+    let slots = response
+        .slots
+        .iter()
+        .map(|slot| {
+            Ok(SlotAssignment {
+                device_id: device(&slot.device_id)?.0,
+                port: slot.udp_port,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let pairs = response
+        .pairs
+        .iter()
+        .map(|pair| {
+            Ok(PairAssignment {
+                device_a: device(&pair.a)?.0,
+                device_b: device(&pair.b)?.0,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let networks = response
+        .networks
+        .iter()
+        .map(|network| {
+            let peers = network
+                .peers
+                .iter()
+                .map(|peer| {
+                    let key = naming::decode_key(&peer.wg_pubkey).ok_or_else(|| {
+                        format!("{} has a key that is not a public key", peer.device_id)
+                    })?;
+                    Ok(KeysetPeer {
+                        device_id: device(&peer.device_id)?.0,
+                        wg_pubkey: key.as_bytes().to_vec(),
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(KeysetNetwork {
+                id: network.id,
+                name: network.name.clone(),
+                peers,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Assignment {
+        generation: 0,
+        slots,
+        pairs,
+        keyset: Keyset { networks },
+    })
+}
+
+/// Ask the coordinator for the assignment this relay is to serve.
+async fn fetch_assignment(
+    flags: &Flags,
+    parsed: &ParsedConfig,
+    state_dir: &Path,
+) -> Result<Assignment, String> {
+    let config = &parsed.relay;
+    let url = flags
+        .value("coordinator")
+        .or_else(|| config.coordinator.clone())
+        .ok_or(
+            "no coordinator is configured: pass --coordinator or set [coordinator] url in \
+             relay.toml",
+        )?;
+    let pin = pin_of(flags, parsed)?;
+    let identity = relay_id_of(state_dir).ok_or_else(|| {
+        format!(
+            "{}: no relay id; run `wgmesh-relayd enroll` first",
+            state_dir.join(RELAY_ID_FILE).display()
+        )
+    })?;
+    let key = RelayKey::open(&state_dir.join("relay.key"));
+    let clock = SystemClock;
+    let answer = coordinator_client(&url, pin, &key, &clock)?
+        .with_identity(identity)
+        .relay_assignment()
+        .await
+        .map_err(|error| coordinator_error(&url, &error))?;
+    assignment_of(&answer)
+}
+
+/// The relay id the coordinator assigned, as enrollment wrote it down.
+fn relay_id_of(state_dir: &Path) -> Option<String> {
+    fs::read_to_string(state_dir.join(RELAY_ID_FILE))
+        .ok()
+        .and_then(|text| non_empty(&text))
+}
+
+/// One comma-separated list of network names.
+fn networks_of(value: String) -> Vec<String> {
+    value.split(',').filter_map(non_empty).collect()
+}
+
+/// A string, when it has anything in it.
+fn non_empty(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// What this machine calls itself, which is the default name for a relay.
+fn hostname() -> Option<String> {
+    for path in ["/proc/sys/kernel/hostname", "/etc/hostname"] {
+        if let Ok(text) = fs::read_to_string(path) {
+            if let Some(name) = non_empty(&text) {
+                return Some(name);
+            }
+        }
+    }
+    std::env::var("HOSTNAME")
+        .ok()
+        .and_then(|name| non_empty(&name))
+}
+
+/// A pin written as 64 hex characters.
+fn parse_spki(text: &str) -> Result<Spki, String> {
+    let text = text.trim();
+    if text.len() != 64 {
+        return Err(format!("expected 64 hex characters, found {}", text.len()));
+    }
+    let mut bytes = [0u8; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        let pair = text
+            .get(index * 2..index * 2 + 2)
+            .ok_or_else(|| format!("not hex: {text}"))?;
+        *byte = u8::from_str_radix(pair, 16).map_err(|_| format!("not hex: {pair}"))?;
+    }
+    Ok(Spki::from_bytes(bytes))
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-
     use super::*;
+    use wgmesh_proto::api::{KeysetNetwork, KeysetPeer, PairBody, SlotBody};
+    use wgmesh_relay::wgmesh_core::DeviceId;
+
+    /// An assignment as the coordinator writes one, with two slots and a pair across them.
+    fn answer() -> AssignmentResponse {
+        let key = naming::encode_key(&PublicKey::from_bytes([4u8; 32]));
+        AssignmentResponse {
+            relay_id: "relay_1".to_string(),
+            endpoint_host: "198.51.100.9".to_string(),
+            slots: vec![
+                SlotBody {
+                    device_id: naming::device_id(DeviceId(3)),
+                    udp_port: 52001,
+                },
+                SlotBody {
+                    device_id: naming::device_id(DeviceId(9)),
+                    udp_port: 52002,
+                },
+            ],
+            pairs: vec![PairBody {
+                a: naming::device_id(DeviceId(3)),
+                b: naming::device_id(DeviceId(9)),
+            }],
+            networks: vec![KeysetNetwork {
+                id: 1,
+                name: "prod".to_string(),
+                peers: vec![KeysetPeer {
+                    device_id: naming::device_id(DeviceId(3)),
+                    wg_pubkey: key,
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn the_assignment_keeps_the_ids_the_keys_and_the_ports() {
+        let assignment = assignment_of(&answer()).expect("the answer is ours");
+        assert_eq!(
+            assignment.slots,
+            vec![
+                SlotAssignment {
+                    device_id: 3,
+                    port: 52001
+                },
+                SlotAssignment {
+                    device_id: 9,
+                    port: 52002
+                },
+            ]
+        );
+        assert_eq!(
+            assignment.pairs,
+            vec![PairAssignment {
+                device_a: 3,
+                device_b: 9
+            }]
+        );
+        assert_eq!(assignment.keyset.networks[0].id, 1);
+        assert_eq!(assignment.keyset.networks[0].name, "prod");
+        assert_eq!(assignment.keyset.networks[0].peers[0].device_id, 3);
+        assert_eq!(assignment.keyset.networks[0].peers[0].wg_pubkey, [4u8; 32]);
+        assert!(assignment.keyset.contains(3), "the keyset names the device");
+    }
+
+    #[test]
+    fn an_assignment_that_does_not_hold_together_is_refused() {
+        let mut broken = answer();
+        broken.slots[0].device_id = "not-a-device".to_string();
+        assert!(
+            assignment_of(&broken).is_err(),
+            "a slot naming nothing is not a slot"
+        );
+
+        let mut broken = answer();
+        broken.networks[0].peers[0].wg_pubkey = "AAAA".to_string();
+        assert!(
+            assignment_of(&broken).is_err(),
+            "a key that is not a key is not a key"
+        );
+    }
+
+    #[test]
+    fn a_pin_is_64_hex_characters() {
+        let pin = parse_spki(&"ab".repeat(32)).expect("32 bytes of hex");
+        assert_eq!(pin.as_bytes()[0], 0xab);
+        assert!(parse_spki("").is_err());
+        assert!(parse_spki("00").is_err());
+        assert!(parse_spki(&"zz".repeat(32)).is_err());
+        // Sixty-four bytes that are not sixty-four characters: a slice at a boundary like that
+        // would panic, so the reader has to refuse it without one.
+        assert!(parse_spki(&"é".repeat(32)).is_err());
+    }
 
     /// The ceiling in the file the documentation specifies has to reach the engine.
     ///

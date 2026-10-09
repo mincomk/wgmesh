@@ -510,15 +510,26 @@ fn the_pipeline_enrols_runs_and_reports_each_peer() {
         .spawn()
         .expect("the agent starts");
 
-    // The daemon converges on its first pass and writes what it found into the state file.
+    // The daemon converges on its first pass and writes what it found into the state file, and the
+    // assertion below is about what a *later* pass records: `path` is one of `direct`, `relayed` or
+    // `unknown`, and it is direct only once a handshake is behind it. Waiting for the peer to appear
+    // alone made this test a race — the first pass writes the peer before there is any handshake —
+    // so it waits for the handshake instead.
     let deadline = Instant::now() + Duration::from_secs(30);
     let state_file = state.join("state.json");
     let mut peers_written = false;
     while Instant::now() < deadline {
         if let Ok(text) = fs::read_to_string(&state_file) {
-            if text.contains("\"id\": \"8\"") {
-                peers_written = true;
-                break;
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                let handshook = value["peers"].as_array().is_some_and(|peers| {
+                    peers.iter().any(|peer| {
+                        peer["id"] == "8" && peer["last_handshake_unix"].as_u64().unwrap_or(0) > 0
+                    })
+                });
+                if handshook {
+                    peers_written = true;
+                    break;
+                }
             }
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -527,7 +538,7 @@ fn the_pipeline_enrols_runs_and_reports_each_peer() {
     let _ = child.wait();
     assert!(
         peers_written,
-        "the daemon did not record its peer in the state file"
+        "the daemon did not record a handshake for its peer in the state file"
     );
 
     let out = bin()
@@ -966,6 +977,15 @@ fn doctor_probes_the_nat_and_says_only_what_the_probe_showed() {
         value["nat"]["observations"].as_array().map(Vec::len),
         Some(2)
     );
+}
+
+#[test]
+fn pin_refuses_an_address_it_cannot_pin() {
+    // Learning a pin needs a TLS handshake, and a plain `http://` address cannot produce one: the
+    // refusal has to say so rather than report an unreachable coordinator.
+    let assertion = bin().args(["pin", "http://127.0.0.1:1"]).assert().failure();
+    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).into_owned();
+    assert!(stderr.contains("https"), "{stderr}");
 }
 
 #[test]

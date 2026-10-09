@@ -77,10 +77,26 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
         &["wgmesh-core", "wgmesh-ports"],
         &["rtnetlink", "nl-wireguard", "tokio"],
     ),
+    // The client is the one adapter that speaks to a remote process instead of to a kernel, so
+    // its row names the HTTPS stack. Four crates were added to section 1.1's list of four, each
+    // for something the client cannot do without: the nonce of every signed request is fresh
+    // randomness and `getrandom` is where the workspace takes it, `serde` and `serde_json` are how
+    // the request bodies go out and the answers come back, and the `wgmesh-ports` coordinator port
+    // is asynchronous, so the macro that spells its implementation has to be nameable here --
+    // the same reason `wgmesh-cli`'s row names `async-trait`.
     (
         "wgmesh-client",
         &["wgmesh-core", "wgmesh-ports", "wgmesh-proto"],
-        &["reqwest", "rustls", "sha2", "base64ct"],
+        &[
+            "reqwest",
+            "rustls",
+            "sha2",
+            "base64ct",
+            "getrandom",
+            "serde",
+            "serde_json",
+            "async-trait",
+        ],
     ),
     (
         "wgmesh-coordinator",
@@ -104,11 +120,15 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "clap",
         ],
     ),
+    // The relay's row gains `wgmesh-ports`: a relay is a principal with a key of its own, and the
+    // client it now uses signs through that crate's `SecretStore`. The same crate's `Clock` is how
+    // a request is stamped, so the port is nameable where the adapter is written.
     (
         "wgmesh-relay",
         &[
             "wgmesh-core",
             "wgmesh-app",
+            "wgmesh-ports",
             "wgmesh-proto",
             "wgmesh-config",
             "wgmesh-state",

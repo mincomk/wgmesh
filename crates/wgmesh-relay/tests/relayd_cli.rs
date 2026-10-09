@@ -33,6 +33,89 @@ fn text(output: &Output) -> String {
     )
 }
 
+/// Read a child's stdout until it has said `needle`, and answer everything it has said.
+///
+/// The daemon keeps running whether or not it has an assignment, so this is the only way to read
+/// what it said on the way: a plain `wait_with_output` would wait for a process that is designed
+/// to keep going.
+fn output_until(child: &mut std::process::Child, needle: &str, seconds: u64) -> String {
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let sink = seen.clone();
+    std::thread::spawn(move || {
+        use std::io::Read as _;
+        let mut buffer = [0u8; 1024];
+        while let Ok(read) = stdout.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            if let Ok(mut text) = sink.lock() {
+                text.push_str(&String::from_utf8_lossy(&buffer[..read]));
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    loop {
+        let text = seen.lock().map(|text| text.clone()).unwrap_or_default();
+        if text.contains(needle) {
+            return text;
+        }
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "the daemon exited before it said `{needle}`: {text}"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "the daemon never said `{needle}`: {text}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[test]
+fn run_says_why_it_has_no_assignment_when_no_coordinator_can_be_reached() {
+    let state = scratch("run-no-coordinator");
+    let arguments = [
+        "run",
+        "--coordinator",
+        "https://127.0.0.1:1",
+        "--pin",
+        TEST_PIN,
+        "--state-dir",
+        state.to_str().unwrap(),
+    ];
+
+    // With no identity there is nothing to sign a request with, and the relay names the command
+    // that produces one rather than pretending it is waiting for the coordinator.
+    let mut child = binary()
+        .args(arguments)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let text = output_until(&mut child, "enroll", 20);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(text.contains("no assignment was fetched"), "{text}");
+    assert!(text.contains("wgmesh-relayd enroll"), "{text}");
+
+    // With one, it asks the coordinator — and says what went wrong when it cannot be reached.
+    fs::write(state.join("relay-id"), "relay_1\n").unwrap();
+    fs::write(state.join("relay.key"), [7u8; 32]).unwrap();
+    let mut child = binary()
+        .args(arguments)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let text = output_until(&mut child, "unreachable", 30);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(text.contains("no assignment was fetched"), "{text}");
+    assert!(text.contains("unreachable"), "{text}");
+    assert!(text.contains("127.0.0.1:1"), "{text}");
+    let _ = fs::remove_dir_all(&state);
+}
+
 #[test]
 fn help_lists_every_subcommand() {
     let output = run(&["--help"]);
@@ -53,15 +136,22 @@ fn an_unknown_subcommand_is_refused() {
     assert!(text(&output).contains("unknown command"));
 }
 
+/// A pin of the right shape. Nothing in these tests reaches a handshake with it.
+const TEST_PIN: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
 #[test]
 fn enroll_fails_honestly_without_a_coordinator() {
     let state = scratch("enroll");
     let output = run(&[
         "enroll",
         "--coordinator",
-        "http://127.0.0.1:1",
+        "https://127.0.0.1:1",
+        "--pin",
+        TEST_PIN,
         "--token",
         "WGMESH-RELAY-TESTONLY",
+        "--endpoint-host",
+        "198.51.100.9",
         "--state-dir",
         state.to_str().unwrap(),
     ]);
@@ -86,6 +176,8 @@ fn enroll_fails_honestly_without_a_coordinator() {
         !state.join("relay.toml").exists(),
         "a failed enrollment must not leave a configuration behind"
     );
+    // Nor an identity: the coordinator is what assigns a relay id, and this one never answered.
+    assert!(!state.join("relay-id").exists());
     let _ = fs::remove_dir_all(&state);
 }
 
@@ -95,7 +187,7 @@ fn enroll_needs_a_token_and_a_coordinator() {
     let no_token = run(&[
         "enroll",
         "--coordinator",
-        "http://127.0.0.1:1",
+        "https://127.0.0.1:1",
         "--state-dir",
         state.to_str().unwrap(),
     ]);
@@ -111,6 +203,39 @@ fn enroll_needs_a_token_and_a_coordinator() {
     ]);
     assert!(!no_coordinator.status.success());
     assert!(text(&no_coordinator).contains("--coordinator"));
+
+    // A pin is never learned from the connection that is being pinned.
+    let no_pin = run(&[
+        "enroll",
+        "--coordinator",
+        "https://127.0.0.1:1",
+        "--token",
+        "WGMESH-RELAY-TESTONLY",
+        "--state-dir",
+        state.to_str().unwrap(),
+    ]);
+    assert!(!no_pin.status.success());
+    assert!(text(&no_pin).contains("--pin"), "{}", text(&no_pin));
+
+    // And the coordinator has to be told where the relay is reachable: it publishes that address
+    // to every node that has to reach this relay.
+    let no_address = run(&[
+        "enroll",
+        "--coordinator",
+        "https://127.0.0.1:1",
+        "--pin",
+        TEST_PIN,
+        "--token",
+        "WGMESH-RELAY-TESTONLY",
+        "--state-dir",
+        state.to_str().unwrap(),
+    ]);
+    assert!(!no_address.status.success());
+    assert!(
+        text(&no_address).contains("--endpoint-host"),
+        "{}",
+        text(&no_address)
+    );
     let _ = fs::remove_dir_all(&state);
 }
 
@@ -326,7 +451,7 @@ fn the_relay_toml_the_nixos_module_renders_is_understood() {
     // Byte for byte the shape `nix/modules/relay.nix` writes: sectioned, with the
     // coordinator URL and the state directory nested one level down.
     let body = format!(
-        "[relay]\nport_range = [51820, 51999]\n\n[coordinator]\nurl = \"http://127.0.0.1:1/\"\nspki_sha256 = \"00\"\nnetwork = \"default\"\n\n[state]\ndir = \"{}\"\n\n[log]\nlevel = \"debug\"\n",
+        "[relay]\nport_range = [51820, 51999]\nendpoint_host = \"198.51.100.9\"\n\n[coordinator]\nurl = \"https://127.0.0.1:1/\"\nspki_sha256 = \"{TEST_PIN}\"\nnetwork = \"default\"\n\n[state]\ndir = \"{}\"\n\n[log]\nlevel = \"debug\"\n",
         state_dir.display()
     );
     fs::write(&config, body).unwrap();
@@ -343,8 +468,12 @@ fn the_relay_toml_the_nixos_module_renders_is_understood() {
     assert!(!output.status.success());
     let message = text(&output);
     assert!(
-        message.contains("coordinator unreachable"),
+        message.contains("unreachable") && message.contains("https://127.0.0.1:1"),
         "the coordinator URL has to come out of the [coordinator] section:\n{message}"
+    );
+    assert!(
+        !message.contains("--pin"),
+        "the pin has to come out of the [coordinator] section too:\n{message}"
     );
     assert!(
         state_dir.join("relay.key").exists(),
