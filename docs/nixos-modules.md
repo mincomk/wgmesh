@@ -121,16 +121,20 @@ does change it, and moving the pins is a deliberate sequence:
    against the certificate on the terminator rather than trusting the
    connection: this is the one handshake wgmesh makes with nothing pinned, and
    it exists for exactly this moment.
-2. **Publish it in the configuration.** `settings.coordinator.spki_sha256` in
-   the coordinator's own module — or `[coordinator] spki_sha256` in a
-   hand-written deployment — becomes the new value, and every node's
-   configuration follows from there.
-3. **Move each node's pin.** A node keeps the pin it learned at enrolment in
-   its state file, and a configuration that disagrees with it is a refusal
-   rather than a quiet re-pin: `run` stops with `pins the coordination-plane
-   key` and names `trust rotate`. `wgmesh trust show` reports the `pinned` and
-   the `configured` value and whether they `match`; `wgmesh trust rotate --yes`
-   writes the configuration's value over the old one, and `run` starts again.
+2. **Publish it where the nodes pin.** Each node that talks to the coordinator —
+   `settings.coordinator.spki_sha256` in `services.wgmesh.agent` and in
+   `services.wgmesh.relay`, or `[coordinator] spki_sha256` in a hand-written
+   `agent.toml` — takes the new value. Nothing propagates it: every node holds
+   its own copy, so a deployment that must not drift keeps the value in one
+   shared module. The coordinator itself pins nothing — it holds no keys and
+   makes no outbound connection.
+3. **Move each node's pin.** The pin a node holds in its state file is the one
+   its configuration named when it enrolled, and a configuration that disagrees
+   with it is a refusal rather than a quiet re-pin: `run` stops with `pins the
+   coordination-plane key` and names `trust rotate`. `wgmesh trust show` reports
+   the `pinned` and the `configured` value and whether they `match`; `wgmesh
+   trust rotate --yes` writes the configuration's value over the old one, and
+   `run` starts again.
 4. **Re-pin the relays.** `wgmesh-relayd` keeps no pin in its state: it takes
    `--pin`, or `[coordinator] spki_sha256` / `coordinator_spki_sha256` from
    relay.toml, on every start, and refuses to connect without one rather than
