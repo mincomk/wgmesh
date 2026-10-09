@@ -197,7 +197,9 @@ in
         Restart = "always";
         RestartSec = 5;
 
-        # Control plane only: no capabilities, no kernel configuration.
+        # Control plane only: no capabilities, no kernel configuration. (The
+        # empty string is an explicitly empty capability set; an empty list would
+        # be left out of the unit and leave the default in place.)
         AmbientCapabilities = [ "" ];
         CapabilityBoundingSet = [ "" ];
         RestrictAddressFamilies = [

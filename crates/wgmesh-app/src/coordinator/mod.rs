@@ -4,7 +4,7 @@ pub mod ports {
     pub use wgmesh_ports::coordinator::*;
 }
 
-pub use wgmesh_ports::{Clock, PortError, PortErrorKind};
+pub use wgmesh_ports::{Class, Clock, PortError};
 
 /// The coordinator's usecases. Each one knows the ports and nothing else: no
 /// SQLite, no HTTP, no clock of its own.

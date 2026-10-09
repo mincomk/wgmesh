@@ -127,7 +127,7 @@ impl Services {
             .store
             .relay_by_id(relay)
             .await?
-            .ok_or_else(|| PortError::not_found("no such relay"))?;
+            .ok_or_else(|| PortError::recoverable("no such relay"))?;
 
         let slots = self
             .store

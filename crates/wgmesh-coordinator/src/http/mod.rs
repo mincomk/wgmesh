@@ -270,6 +270,10 @@ impl ApiError {
         Self::new(StatusCode::CONFLICT, "conflict", message)
     }
 
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", message)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message)
     }
@@ -277,19 +281,12 @@ impl ApiError {
 
 impl From<PortError> for ApiError {
     fn from(error: PortError) -> Self {
-        match error.kind() {
-            wgmesh_app::coordinator::PortErrorKind::NotFound => {
-                Self::not_found(error.message().to_string())
-            }
-            wgmesh_app::coordinator::PortErrorKind::Conflict => {
-                Self::conflict(error.message().to_string())
-            }
-            wgmesh_app::coordinator::PortErrorKind::Refused => {
-                Self::forbidden(error.message().to_string())
-            }
-            wgmesh_app::coordinator::PortErrorKind::Storage => {
-                Self::internal(error.message().to_string())
-            }
+        let detail = error.detail().to_string();
+        match error.class() {
+            wgmesh_app::coordinator::Class::Transient => Self::unavailable(detail),
+            wgmesh_app::coordinator::Class::Recoverable => Self::not_found(detail),
+            wgmesh_app::coordinator::Class::Fatal => Self::internal(detail),
+            wgmesh_app::coordinator::Class::Trust => Self::forbidden(detail),
         }
     }
 }

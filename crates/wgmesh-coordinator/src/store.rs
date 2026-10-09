@@ -53,7 +53,7 @@ impl Sqlite {
     /// matters because two devices may spend the same join token at once.
     pub async fn open(url: &str, max_connections: u32) -> Result<Self, PortError> {
         let options = SqliteConnectOptions::from_str(url)
-            .map_err(|error| PortError::storage(format!("bad database url: {error}")))?
+            .map_err(|error| PortError::fatal(format!("bad database url: {error}")))?
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(10))
@@ -70,7 +70,7 @@ impl Sqlite {
         sqlx::migrate!("./migrations")
             .run(&self.pool)
             .await
-            .map_err(|error| PortError::storage(format!("migration failed: {error}")))
+            .map_err(|error| PortError::fatal(format!("migration failed: {error}")))
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -81,10 +81,10 @@ impl Sqlite {
 fn storage(error: sqlx::Error) -> PortError {
     if let sqlx::Error::Database(database) = &error {
         if database.is_unique_violation() {
-            return PortError::conflict(database.message().to_string());
+            return PortError::fatal(database.message().to_string());
         }
     }
-    PortError::storage(error.to_string())
+    PortError::fatal(error.to_string())
 }
 
 fn blob(key: &PublicKey) -> Vec<u8> {
@@ -101,11 +101,11 @@ fn to_device(row: DeviceRow) -> Result<Device, PortError> {
         id: DeviceId(row.0 as u32),
         network_id: row.1 as u32,
         name: row.2,
-        wg_pubkey: key(&row.3).ok_or_else(|| PortError::storage("wg_pubkey torn"))?,
-        api_pubkey: key(&row.4).ok_or_else(|| PortError::storage("api_pubkey torn"))?,
+        wg_pubkey: key(&row.3).ok_or_else(|| PortError::fatal("wg_pubkey torn"))?,
+        api_pubkey: key(&row.4).ok_or_else(|| PortError::fatal("api_pubkey torn"))?,
         tunnel_ip: row.5,
         state: DeviceState::parse(&row.6)
-            .ok_or_else(|| PortError::storage(format!("unknown device state {}", row.6)))?,
+            .ok_or_else(|| PortError::fatal(format!("unknown device state {}", row.6)))?,
         advertised: wgmesh_proto::bands::decode(&row.7),
     })
 }
@@ -114,9 +114,9 @@ fn to_relay(row: RelayRow) -> Result<Relay, PortError> {
     Ok(Relay {
         id: RelayId(row.0 as u16),
         name: row.1,
-        api_pubkey: key(&row.2).ok_or_else(|| PortError::storage("relay key torn"))?,
+        api_pubkey: key(&row.2).ok_or_else(|| PortError::fatal("relay key torn"))?,
         state: RelayState::parse(&row.3)
-            .ok_or_else(|| PortError::storage(format!("unknown relay state {}", row.3)))?,
+            .ok_or_else(|| PortError::fatal(format!("unknown relay state {}", row.3)))?,
         endpoint_host: row.4,
         port_range: row.5,
         region: row.6,
@@ -647,7 +647,7 @@ impl Reports for Sqlite {
         };
         let address: SocketAddr = format!("{ip}:{port}")
             .parse()
-            .map_err(|_| PortError::storage("observation address unreadable"))?;
+            .map_err(|_| PortError::fatal("observation address unreadable"))?;
         Ok(Some((
             Endpoint::new(address),
             Millis::from_millis(seen_at as u64),

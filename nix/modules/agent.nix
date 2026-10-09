@@ -62,6 +62,15 @@ let
     };
 
   listenPort = cfg.settings.interface.listen_port or 0;
+
+  # The tunnel interface's name, as the nftables rule needs it.
+  tunnel = cfg.settings.interface.name or "wg0";
+
+  # nftables set elements are comma separated -- `{ eth0 eth1 }` is a syntax
+  # error ("unexpected string, expecting comma or '}'"), and NixOS runs
+  # `nft --check` over the whole ruleset at build time, so one malformed element
+  # fails the system rather than one rule.
+  trustedSet = lib.concatMapStringsSep ", " (name: "\"${name}\"") cfg.forwarding.trustedInterfaces;
 in
 {
   options.services.wgmesh.agent = {
@@ -243,6 +252,19 @@ in
         '';
       }
       {
+        # The rule the module adds is written as an nftables set, and an empty
+        # set -- `iifname { }` -- is a syntax error that rejects the whole
+        # ruleset when nftables loads it.
+        assertion =
+          !(cfg.forwarding.enable && cfg.forwarding.firewall == "manage")
+          || cfg.forwarding.trustedInterfaces != [ ];
+        message = ''
+          services.wgmesh.agent: forwarding.firewall = "manage" needs at least one
+          interface in forwarding.trustedInterfaces: the rule nftables gets is a set,
+          and an empty set is a syntax error.
+        '';
+      }
+      {
         assertion = lib.hasPrefix "/var/lib/" stateDir;
         message = "services.wgmesh.agent: stateDir must be below /var/lib (it is the name systemd's StateDirectory= provides): ${stateDir}";
       }
@@ -342,10 +364,8 @@ in
       content = ''
         chain forward {
           type filter hook forward priority filter; policy accept;
-          iifname { ${toString cfg.forwarding.trustedInterfaces} } oifname "${
-            cfg.settings.interface.name or "wg0"
-          }" accept
-          iifname "${cfg.settings.interface.name or "wg0"}" oifname { ${toString cfg.forwarding.trustedInterfaces} } accept
+          iifname { ${trustedSet} } oifname "${tunnel}" accept
+          iifname "${tunnel}" oifname { ${trustedSet} } accept
         }
       '';
     };
