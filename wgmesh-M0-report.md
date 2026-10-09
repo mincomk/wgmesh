@@ -363,6 +363,9 @@ $ cargo xtask check-deps                      # ok
 $ cargo xtask check-style                     # ok
 ```
 
+CI ran the same five commands on a GitHub-hosted runner for pull request #10
+(`m0/conformance` -> `main`) and passed: run 37919613490, 46s, success.
+
 ---
 
 ## 7. What M0 still owes
