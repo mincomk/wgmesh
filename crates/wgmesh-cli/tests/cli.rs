@@ -407,6 +407,86 @@ fn help_lists_every_command_the_contract_names() {
     }
 }
 
+/// The token the NixOS module hands over: not a line in the configuration file, but the systemd
+/// credential named by `WGMESH__ENROLLMENT__TOKEN_FILE` — the variable `nix/modules/agent.nix` sets
+/// to `%d/enrollment-token`, which systemd resolves to
+/// `/run/credentials/wgmesh-agent.service/enrollment-token`. A reader that resolved the
+/// configuration file a second time, without the environment layer, would find no token here, and
+/// the agent would refuse to enrol on a host configured exactly as the module configures it.
+#[test]
+fn the_credential_the_module_hands_over_enrols_the_agent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_world(dir.path());
+    let credential = dir.path().join("enrollment-token");
+    fs::write(&credential, "tok\n").expect("credential written");
+    // No `[enrollment]` table anywhere: the credential is the only place the token exists.
+    let config = minimal_config(dir.path());
+    let state = state_dir(dir.path());
+
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .env("WGMESH__ENROLLMENT__TOKEN_FILE", &credential)
+        .args(["--backend", "simulated", "join"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("enrolled as device 7"));
+
+    // And with the state gone — what `state reset` leaves behind — the next run enrols again from
+    // the same credential, which is what makes a reset survivable on a host whose token only ever
+    // existed as a credential.
+    fs::remove_file(state.join("state.json")).expect("state removed");
+    let mut child = bin()
+        .arg("--config")
+        .arg(&config)
+        .env("WGMESH__ENROLLMENT__TOKEN_FILE", &credential)
+        .args(["--backend", "simulated", "run"])
+        .spawn()
+        .expect("the agent starts");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut enrolled = false;
+    while Instant::now() < deadline {
+        if let Ok(text) = fs::read_to_string(state.join("state.json")) {
+            if text.contains("\"id\": \"8\"") {
+                enrolled = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(enrolled, "a run with only the credential did not enrol");
+}
+
+/// The other route to the same token, so the fix above did not trade one for the other: a file the
+/// configuration itself names.
+#[test]
+fn a_token_file_named_by_the_configuration_enrols_the_agent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_world(dir.path());
+    let token_file = dir.path().join("token");
+    fs::write(&token_file, "tok\n").expect("token written");
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[coordinator]\nurl = \"https://wgmesh.example.com\"\nspki_sha256 = \"{GOOD_SPKI}\"\n\n\
+             [enrollment]\ntoken_file = \"{}\"\n\n\
+             [state]\ndir = \"{}\"\n",
+            token_file.display(),
+            state_dir(dir.path()).display()
+        ),
+    );
+
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "join"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("enrolled as device 7"));
+}
+
 /// The acceptance pipeline: enrol, run, and read one JSON document back out of it.
 #[test]
 fn the_pipeline_enrols_runs_and_reports_each_peer() {
@@ -672,4 +752,63 @@ fn base64_decode(text: &str) -> Vec<u8> {
         }
     }
     out
+}
+
+/// The four routing and forwarding misconfigurations, each reported by name.
+///
+/// The peer-dependent two need the coordinator's answer, which a snapshot file
+/// supplies — the same body `GET /v1/config` returns.
+#[test]
+fn doctor_catches_the_routing_misconfigurations_a_snapshot_shows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[coordinator]\nurl = \"https://wgmesh.example.com\"\nspki_sha256 = \"{GOOD_SPKI}\"\n\n\
+             [state]\ndir = \"{}\"\n\n\
+             [route]\ntable = \"off\"\n",
+            state_dir(dir.path()).display()
+        ),
+    );
+    let snapshot = dir.path().join("snapshot.json");
+    std::fs::write(
+        &snapshot,
+        r#"{
+  "network": {"id": 1, "name": "prod", "cidr": "10.77.0.0/16", "mtu": 1420, "relay_policy": "any"},
+  "me": {"device_id": "d_self", "tunnel_ip": "10.77.0.7/16", "state": "active"},
+  "peers": [
+    {"device_id": "d_a", "name": "router-a", "wg_pubkey": "AAAA", "tunnel_ip": "10.77.0.8/16",
+     "advertised": ["0.0.0.0/0"], "state": "active"},
+    {"device_id": "d_b", "name": "router-b", "wg_pubkey": "BBBB", "tunnel_ip": "10.77.0.9/16",
+     "advertised": ["0.0.0.0/0"], "state": "active"}
+  ]
+}"#,
+    )
+    .expect("the snapshot is written");
+
+    // A doctor that finds something says so in its exit code as well as its document.
+    let assertion = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "doctor", "--json"])
+        .arg("--snapshot")
+        .arg(&snapshot)
+        .assert()
+        .failure();
+    let out = assertion.get_output().stdout.clone();
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("valid json on stdout");
+    let names: Vec<&str> = value["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .filter_map(|check| check["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"catch-all-on-multiple-peers"),
+        "the two catch-alls were not reported: {names:?}"
+    );
+    assert!(
+        names.contains(&"routes-needed-but-table-off"),
+        "the unmanaged table was not reported: {names:?}"
+    );
 }

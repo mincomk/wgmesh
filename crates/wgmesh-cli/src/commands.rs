@@ -13,7 +13,8 @@ use wgmesh_ports::{Clock, JoinToken, Routes, StateStore, WireGuard};
 use crate::adapters::{FileSecrets, FileState, encode_public_key};
 use crate::agent;
 use crate::cli::{
-    Cli, Command, ConfigAction, KeyAction, KeyKind, RoutesAction, StateAction, TrustAction,
+    Cli, Command, ConfigAction, DoctorArgs, KeyAction, KeyKind, RoutesAction, StateAction,
+    TrustAction,
 };
 use crate::container::{Container, Paths};
 use crate::error::{CliError, Problem, Severity};
@@ -25,8 +26,19 @@ use crate::view::{
 };
 
 /// Configure logging: everything goes to stderr, so stdout stays a single document.
+///
+/// The level is the one the resolved configuration names — `[log] level` in the file, which
+/// `WGMESH__LOG__LEVEL` overrides — rather than the environment variable alone, which is how a
+/// configuration file that asked for `debug` ended up logging at `info`. The variable keeps its
+/// second reading as a whole `tracing-subscriber` filter expression (`wgmesh=debug,info`), which
+/// is what it has to be for the environment layer to reach a schema that holds a level word.
 pub fn init_logging(cli: &Cli) {
-    let level = std::env::var("WGMESH__LOG__LEVEL").unwrap_or_else(|_| "info".to_string());
+    let level = match std::env::var("WGMESH__LOG__LEVEL") {
+        Ok(raw) if !raw.trim().is_empty() => raw,
+        _ => load(cli)
+            .map(|(settings, _problems)| level_word(settings.log.level).to_string())
+            .unwrap_or_else(|_| "info".to_string()),
+    };
     let filter = tracing_subscriber::EnvFilter::try_new(level)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::fmt()
@@ -34,7 +46,17 @@ pub fn init_logging(cli: &Cli) {
         .with_writer(std::io::stderr)
         .with_target(false)
         .try_init();
-    let _ = cli;
+}
+
+/// The filter directive `[log] level` names.
+fn level_word(level: wgmesh_config::LogLevel) -> &'static str {
+    match level {
+        wgmesh_config::LogLevel::Error => "error",
+        wgmesh_config::LogLevel::Warn => "warn",
+        wgmesh_config::LogLevel::Info => "info",
+        wgmesh_config::LogLevel::Debug => "debug",
+        wgmesh_config::LogLevel::Trace => "trace",
+    }
 }
 
 /// Run the command the command line asked for.
@@ -79,7 +101,7 @@ pub async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Peers(json) => peers(&cli, json.json),
         Command::Routes(args) => routes(&cli, args),
         Command::Relays(json) => relays(&cli, json.json),
-        Command::Doctor(json) => doctor(&cli, json.json),
+        Command::Doctor(args) => doctor(&cli, args),
         Command::Pin(args) => crate::container::pin_unavailable(&args.url, args.json),
     }
 }
@@ -184,7 +206,7 @@ fn problem_view(problem: &Problem) -> ProblemView {
 }
 
 fn show_key(cli: &Cli, kind: KeyKind, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let (private, public) = match kind {
         KeyKind::Wg => container
             .secrets()
@@ -218,7 +240,7 @@ fn rotate_key(cli: &Cli, yes: bool) -> Result<(), CliError> {
              about; pass --yes to confirm",
         ));
     }
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let public = container
         .secrets()
         .rotate_tunnel()
@@ -229,7 +251,7 @@ fn rotate_key(cli: &Cli, yes: bool) -> Result<(), CliError> {
 }
 
 fn show_state(cli: &Cli, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let path = container.state().path().to_path_buf();
     let Some(document) = container
         .state()
@@ -266,7 +288,7 @@ fn reset_state(cli: &Cli, yes: bool) -> Result<(), CliError> {
              the next run enrols again; pass --yes to confirm",
         ));
     }
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let path = container.state().path().to_path_buf();
     container
         .state()
@@ -280,7 +302,7 @@ fn reset_state(cli: &Cli, yes: bool) -> Result<(), CliError> {
 }
 
 fn show_trust(cli: &Cli, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let configured = container
         .settings()
         .coordinator
@@ -314,7 +336,7 @@ fn rotate_trust(cli: &Cli, yes: bool) -> Result<(), CliError> {
              to confirm",
         ));
     }
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let spki = container.configured_spki()?;
     let mut document = container
         .state()
@@ -334,7 +356,11 @@ fn rotate_trust(cli: &Cli, yes: bool) -> Result<(), CliError> {
 }
 
 async fn join(cli: &Cli, token: Option<String>, json: bool) -> Result<(), CliError> {
-    let token = match crate::container::read_token(&cli.config, token)? {
+    // The settings are resolved once, here, so the token's path is the one every other command
+    // reads: the file, the environment (which is where the NixOS module puts the systemd
+    // credential) and the flags, in that order.
+    let (settings, _problems) = load(cli)?;
+    let token = match crate::container::read_token(&settings, token)? {
         Some(token) => token,
         None => {
             return Err(CliError::usage(
@@ -343,7 +369,7 @@ async fn join(cli: &Cli, token: Option<String>, json: bool) -> Result<(), CliErr
             ));
         }
     };
-    let container = container(cli, Some(token))?;
+    let container = container_with(cli, settings, Some(token))?;
     let settings = container.agent_settings()?;
     let agent = container.agent(settings)?;
     let state = agent
@@ -394,7 +420,10 @@ async fn run(cli: &Cli, check_only: bool) -> Result<(), CliError> {
         println!("configuration ok; nothing was started");
         return Ok(());
     }
-    let token = crate::container::read_token(&cli.config, None)?;
+    // The token is read from the settings this command already resolved, so an agent configured
+    // with nothing but `WGMESH__ENROLLMENT__TOKEN_FILE` — the credential the NixOS module hands
+    // it — can enrol on a run that has no state to resume from.
+    let token = crate::container::read_token(&settings, None)?;
     let container = container_with(cli, settings, token)?;
     let started = agent::run(&container).await?;
     println!(
@@ -415,7 +444,7 @@ fn status(cli: &Cli, json: bool) -> Result<(), CliError> {
 }
 
 fn peers(cli: &Cli, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let view = peers_view(&container)?;
     if json {
         println!("{}", output::json(&view));
@@ -426,7 +455,7 @@ fn peers(cli: &Cli, json: bool) -> Result<(), CliError> {
 }
 
 fn routes(cli: &Cli, args: &crate::cli::RoutesArgs) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     match &args.action {
         None => {
             let installed = installed_routes(&container)?;
@@ -504,7 +533,7 @@ fn routes(cli: &Cli, args: &crate::cli::RoutesArgs) -> Result<(), CliError> {
 }
 
 fn relays(cli: &Cli, json: bool) -> Result<(), CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let document = container
         .state()
         .document()
@@ -553,8 +582,9 @@ fn relays(cli: &Cli, json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn doctor(cli: &Cli, json: bool) -> Result<(), CliError> {
+fn doctor(cli: &Cli, args: &DoctorArgs) -> Result<(), CliError> {
     let (settings, problems) = load(cli)?;
+    let checked = settings.clone();
     let exit_peer = settings.peers.exit_peer.clone();
     let allowed_ips = settings.peers.allowed_ips;
     let forwarding_enabled = settings.forwarding.enabled;
@@ -622,33 +652,55 @@ fn doctor(cli: &Cli, json: bool) -> Result<(), CliError> {
             detail: error,
         }),
     }
-    checks.push(CheckView {
-        name: "forwarding".to_string(),
-        status: if forwarding_enabled { "warn" } else { "ok" }.to_string(),
-        detail: if forwarding_enabled {
-            "forwarding.enabled is on: this device routes for others, so the kernel's ip_forward \
-             has to be set"
-                .to_string()
-        } else {
-            "off: this device does not route for others".to_string()
-        },
-    });
-    if !exit_peer.is_empty() {
-        checks.push(CheckView {
-            name: "exit peer".to_string(),
-            status: "warn".to_string(),
-            detail: format!(
-                "peers.exit_peer names {exit_peer:?}; a name is resolved against the coordinator's \
-                 peer list, which this build does not have yet, so the policy in force is \
-                 {allowed_ips:?}"
+    // The routing and forwarding checks, over whatever this build can actually see.
+    //
+    // The peer-dependent half of them needs the coordinator's answer: which peers exist and which
+    // bands they advertise. A `--snapshot` supplies it; without one the checks that need it are
+    // skipped and said to be skipped, rather than passed silently.
+    let (snapshot, snapshot_note) = match &args.snapshot {
+        Some(path) => match crate::doctor::load_snapshot(path) {
+            Ok(snapshot) => (Some(snapshot), None),
+            Err(error) => (
+                None,
+                Some(format!("--snapshot {path:?} could not be read: {error}")),
             ),
+        },
+        None => (
+            None,
+            Some(
+                "no --snapshot was given: which peers exist and which bands they advertise come \
+                 from the coordinator, and this build has no HTTPS client, so those checks did \
+                 not run"
+                    .to_string(),
+            ),
+        ),
+    };
+    let report = crate::doctor::run(&checked, snapshot.as_ref(), &crate::doctor::ProcSysctl);
+    for finding in &report.findings {
+        checks.push(CheckView {
+            name: finding.code.as_str().to_string(),
+            status: match finding.severity {
+                wgmesh_core::doctor::Severity::Error => "fail",
+                wgmesh_core::doctor::Severity::Warning => "warn",
+                wgmesh_core::doctor::Severity::Info => "ok",
+            }
+            .to_string(),
+            detail: format!("{} — {}", finding.summary, finding.remedy),
         });
     }
+    for note in report.notes.iter().chain(snapshot_note.iter()) {
+        checks.push(CheckView {
+            name: "routing".to_string(),
+            status: "warn".to_string(),
+            detail: note.clone(),
+        });
+    }
+    let _ = (forwarding_enabled, &exit_peer, allowed_ips);
     let view = DoctorView {
         schema: output::SCHEMA,
         checks,
     };
-    if json {
+    if args.json {
         println!("{}", output::json(&view));
     } else {
         print!("{}", view.human());
@@ -661,7 +713,7 @@ fn doctor(cli: &Cli, json: bool) -> Result<(), CliError> {
 
 /// The status a person or a script reads.
 pub fn status_view(cli: &Cli) -> Result<StatusView, CliError> {
-    let container = container(cli, None)?;
+    let container = container(cli)?;
     let document = container
         .state()
         .document()
@@ -818,10 +870,10 @@ fn installed_routes(container: &Container) -> Result<Vec<wgmesh_core::RouteSpec>
         .map_err(|error| CliError::runtime(error.to_string()))
 }
 
-/// Build a container from the command line alone.
-fn container(cli: &Cli, token: Option<JoinToken>) -> Result<Container, CliError> {
+/// Build a container from the command line alone, with no join token.
+fn container(cli: &Cli) -> Result<Container, CliError> {
     let (settings, _problems) = load(cli)?;
-    container_with(cli, settings, token)
+    container_with(cli, settings, None)
 }
 
 fn container_with(

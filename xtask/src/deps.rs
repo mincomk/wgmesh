@@ -35,6 +35,9 @@ use serde_json::Value;
 // (crate, internal crates it may use, external crates it may use)
 const ALLOWED: &[(&str, &[&str], &[&str])] = &[
     ("wgmesh-core", &[], &["blake2"]),
+    // The metrics exposition is a wire format of its own, so it is a crate of
+    // its own. It has no dependencies at all: a counter is a number in a map.
+    ("wgmesh-metrics", &[], &[]),
     (
         "wgmesh-conformance",
         &["wgmesh-core"],
@@ -88,8 +91,18 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-config",
             "wgmesh-state",
             "wgmesh-secrets",
+            "wgmesh-metrics",
         ],
-        &["axum", "sqlx", "tokio", "tower-http", "async-trait", "clap"],
+        &[
+            "axum",
+            "sqlx",
+            "tokio",
+            "tokio-stream",
+            "serde_json",
+            "tower-http",
+            "async-trait",
+            "clap",
+        ],
     ),
     (
         "wgmesh-relay",
@@ -130,6 +143,7 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "clap",
             "serde",
             "serde_json",
+            "thiserror",
             "tokio",
             "tracing",
             "tracing-subscriber",

@@ -10,9 +10,10 @@ const DEFAULT_CONFIG: &str = "/etc/wgmesh/agent.toml";
     version,
     about = "WireGuard mesh agent",
     long_about = "A WireGuard mesh with a coordination plane and a relay data plane.\n\n\
-                  Configuration comes from a file, the environment (WGMESH__SECTION__KEY) and the\n\
-                  command line, in that order of increasing precedence. Run `wgmesh config show`\n\
-                  to see the effective values."
+                  Configuration is resolved from the file `--config` names and from the\n\
+                  environment (WGMESH__SECTION__KEY), which wins over the file; `--state-dir`\n\
+                  then overrides the state directory. Run `wgmesh config show` to see the\n\
+                  effective values."
 )]
 pub struct Cli {
     /// The configuration file to read.
@@ -47,6 +48,19 @@ pub struct JsonFlag {
     /// Print one JSON document instead of the human form.
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Print one JSON document instead of the human form.
+    #[arg(long)]
+    pub json: bool,
+
+    /// A coordinator snapshot — the body of `GET /v1/config` — to check the peers and the bands
+    /// against. Without one the peer-dependent checks cannot run: this build has no HTTPS client
+    /// yet, and the state file does not carry the bands a peer advertises.
+    #[arg(long, value_name = "PATH")]
+    pub snapshot: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -208,7 +222,7 @@ pub enum Command {
     /// Show or rotate the pinned coordinator certificate.
     Trust(TrustArgs),
     /// Diagnose configuration, capabilities and routing.
-    Doctor(JsonFlag),
+    Doctor(DoctorArgs),
     /// Compute the SPKI pin of a coordinator URL.
     Pin(PinArgs),
 }

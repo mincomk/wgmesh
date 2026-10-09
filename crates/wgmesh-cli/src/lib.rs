@@ -22,3 +22,6 @@ pub mod simulated;
 pub mod view;
 
 pub use error::{CliError, Problem, Severity};
+
+pub mod doctor;
+pub mod natprobe;
