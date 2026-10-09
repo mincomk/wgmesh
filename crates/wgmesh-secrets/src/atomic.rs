@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 // This writer is deliberately a copy of the state adapter's. The two adapters hold keys
@@ -19,8 +19,23 @@ pub fn mode_of(path: &Path) -> io::Result<u32> {
 }
 
 /// Create a directory with an exact mode, whatever the process umask says.
+///
+/// The mode is given to the call that creates the directory rather than applied after it,
+/// so a directory this product makes private does not exist, even for an instant, under a
+/// looser umask. The mode is then set once more so that a umask cannot strip it either.
 pub fn ensure_dir(dir: &Path, mode: u32) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
+    if let Some(parent) = dir.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(mode);
+    if let Err(error) = builder.create(dir) {
+        if error.kind() != io::ErrorKind::AlreadyExists {
+            return Err(error);
+        }
+    }
     fs::set_permissions(dir, fs::Permissions::from_mode(mode))
 }
 

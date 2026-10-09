@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// The mode a state file carries: the daemon writes it, its group may read it.
@@ -15,8 +15,23 @@ pub fn mode_of(path: &Path) -> io::Result<u32> {
 }
 
 /// Create a directory with an exact mode, whatever the process umask says.
+///
+/// The mode is given to the call that creates the directory rather than applied after it,
+/// so a directory this product makes private does not exist, even for an instant, under a
+/// looser umask. The mode is then set once more so that a umask cannot strip it either.
 pub fn ensure_dir(dir: &Path, mode: u32) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
+    if let Some(parent) = dir.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(mode);
+    if let Err(error) = builder.create(dir) {
+        if error.kind() != io::ErrorKind::AlreadyExists {
+            return Err(error);
+        }
+    }
     fs::set_permissions(dir, fs::Permissions::from_mode(mode))
 }
 
@@ -159,15 +174,26 @@ mod tests {
     #[test]
     fn an_existing_directory_is_not_re_moded() {
         let directory = tempdir();
+        let before = match mode_of(directory.path()) {
+            Ok(mode) => mode,
+            Err(error) => panic!("stat: {error}"),
+        };
         if let Err(error) = ensure_dir_if_absent(directory.path(), 0o700) {
             panic!("ensuring: {error}");
         }
         match mode_of(directory.path()) {
-            Ok(mode) => assert_ne!(
-                mode & 0o700,
-                0,
-                "the caller's directory was re-moded to {mode:o}"
+            Ok(mode) => assert_eq!(
+                mode, before,
+                "the caller's directory was re-moded from {before:o} to {mode:o}"
             ),
+            Err(error) => panic!("stat: {error}"),
+        }
+        let fresh = directory.path().join("made");
+        if let Err(error) = ensure_dir(&fresh, 0o750) {
+            panic!("creating: {error}");
+        }
+        match mode_of(&fresh) {
+            Ok(mode) => assert_eq!(mode, 0o750),
             Err(error) => panic!("stat: {error}"),
         }
     }

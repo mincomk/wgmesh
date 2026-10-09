@@ -26,10 +26,13 @@ impl Prefix {
     }
 
     /// Whether this prefix is a default route, which this product never installs.
+    ///
+    /// A length of zero covers every address whatever the host bits say -- the kernel
+    /// masks them off before it looks -- so `10.0.0.0/0` is a default route too.
     pub fn is_catch_all(&self) -> bool {
         match self {
-            Prefix::V4(bytes, bits) => *bits == 0 && bytes.iter().all(|byte| *byte == 0),
-            Prefix::V6(bytes, bits) => *bits == 0 && bytes.iter().all(|byte| *byte == 0),
+            Prefix::V4(_, bits) => *bits == 0,
+            Prefix::V6(_, bits) => *bits == 0,
         }
     }
 
@@ -533,6 +536,8 @@ mod tests {
     fn the_catch_all_prefixes_are_recognized() {
         assert!(prefix("0.0.0.0/0").is_catch_all());
         assert!(prefix("::/0").is_catch_all());
+        assert!(prefix("10.0.0.0/0").is_catch_all());
+        assert!(prefix("fd00::/0").is_catch_all());
         assert!(!prefix("10.77.0.0/16").is_catch_all());
         assert!(!prefix("0.0.0.0/1").is_catch_all());
     }
