@@ -140,3 +140,100 @@ WireGuard, but they were relayed first.
 4. `rejected` on a relay that is handed a packet addressed outside its keyset.
 5. The same three checks with the layout switched off, to confirm the port-per-pair path is
    unchanged on real hardware.
+
+## 7. Real WireGuard packets, measured through `route_one_port` (2026-10-09)
+
+Everything in §4 was measured with buffers this repository built. This section was measured
+with bytes nobody here wrote.
+
+### 7.1 Where the capture came from
+
+Two WireGuard peers running **boringtun 0.7.1** — an independent implementation (Cloudflare's),
+not this repository's constants — performed a genuine Noise_IKpsk2 handshake over loopback UDP
+and then sent tunnel traffic through the session it established. A second pair ran with the
+responder configured to consider itself under load, so that it answered an initiation whose
+`mac2` did not verify with a **cookie reply**. While both exchanges ran:
+
+```
+sudo tcpdump -i lo -s0 -U -w wg-handshake.pcap \
+  'udp port 51901 or udp port 51902 or udp port 51903 or udp port 51904'
+```
+
+The machine was this Computer (Attacca Computer, Linux 6.18.35). The capture — 1,010 bytes,
+seven datagrams — is committed at `crates/wgmesh-relay/tests/data/wg-handshake.pcap`, with
+`tests/data/README.md` recording the command and the two static public keys the peers used
+(a static public key is never on the wire, so it cannot be read out of the file).
+
+| # | Direction | Type | Bytes |
+|---|---|---|---|
+| 1 | 51901 → 51902 | 1, initiation | 148 |
+| 2 | 51902 → 51901 | 2, response | 92 |
+| 3 | 51901 → 51902 | 4, transport (keepalive) | 32 |
+| 4 | 51901 → 51902 | 4, transport (keepalive) | 32 |
+| 5 | 51901 → 51902 | 4, transport (a 31-byte tunnel packet, padded) | 64 |
+| 6 | 51903 → 51904 | 1, initiation | 148 |
+| 7 | 51904 → 51903 | 3, cookie reply | 64 |
+
+### 7.2 What the capture settles
+
+**The offsets are the ones `router.rs` reads.** Read off datagrams 1, 2, 5, 6 and 7 rather than
+from the protocol document:
+
+| Field | Where the capture puts it | `router.rs` |
+|---|---|---|
+| message type | byte 0, with three zero bytes after it, on every type | `classify` |
+| initiation `sender_index` | 4 | `OFF_INDEX` |
+| response `sender_index` | 4 | `OFF_INDEX` |
+| response `receiver_index` | 8 | `OFF_RECEIVER_OF_RESPONSE` |
+| cookie reply `receiver_index` | 4 | `OFF_INDEX` |
+| transport `receiver_index` | 4 | `OFF_INDEX` |
+| `mac1` | first 16 bytes of the packet's last 32 | `verify_mac1` |
+| sizes | 148 / 92 / 64 / ≥32 | `MessageKind::size_floor` |
+
+The indices are not merely in the right place; they are each other's. The response's
+`receiver_index` at 8 is the initiation's `sender_index` at 4; the transport's `receiver_index`
+at 4 is the response's `sender_index` at 4; the cookie reply's `receiver_index` at 4 is the
+second initiation's `sender_index` at 4. A field read one byte off would not line up.
+
+**`mac1` is keyed by the recipient, in both directions.** `verify_mac1` — this repository's
+`HASH(LABEL_MAC1 || key)` and MAC — accepts the captured initiation under the *responder's*
+static public key and rejects it under the initiator's, and accepts the captured response under
+the *initiator's* key and rejects it under the responder's. Corrupting one bit before `mac1`'s
+last byte breaks it; corrupting `mac2` does not. That is the assumption §3 states, confirmed by
+an implementation that interoperates with the kernel's.
+
+**The packets route.** `crates/wgmesh-relay/tests/wireguard_capture.rs` replays the capture
+through `RelayTable::route_one_port` with the two peers' static public keys in a keyset:
+
+- datagram 1 from the initiator's slot → `Forward { from: initiator, to: responder }`, resolved
+  by `mac1` alone;
+- datagram 2 from the responder's slot → `Forward { from: responder, to: initiator }` — also by
+  `mac1`, keyed by the other peer — and carrying it is what teaches the relay the responder's
+  session index;
+- datagrams 3–5 from the initiator's slot → `Forward { from: initiator, to: responder }`,
+  resolved by `receiver_index` through that learned session;
+- datagram 6 from the second initiator's slot → `Forward` on `mac1`; datagram 7, the cookie
+  reply, back the other way on the `receiver_index` of the initiation it answers;
+- and flipping one bit of the real initiation's `mac1` makes the same table drop it, so the
+  assertions are reading the field rather than agreeing with themselves.
+
+The test adds no dependency — a pcap is a 24-byte header and `(16-byte record header, frame)`
+pairs, so it parses the file itself — and it runs as part of `cargo test --workspace`.
+
+### 7.3 What is still not measured
+
+1. **This is not the kernel.** The bytes are WireGuard's, produced by an implementation that
+   interoperates with the kernel's, but no kernel `wireguard` interface, no `wg(8)` and no
+   kernel module produced any of them. The kernel's own framing has still not been captured on
+   this Computer, and §5.1–5.2's caveat narrows rather than closes: the offsets and the `mac1`
+   derivation are now measured, the *kernel's* copy of them is not.
+2. **The kernel path is closed here, and why.** `ip link add dev wgX type wireguard` inside this
+   Computer's namespaces fails with `Unknown device type`: the kernel registers no `wireguard`
+   link kind, there is no `/lib/modules`, and a container cannot load one. Worth recording
+   because the earlier milestones reported the blunter reason: **a network namespace *is*
+   available here** — `unshare -rn --map-root-user` succeeds, `sudo` is available, `/dev/net/tun`
+   is present and `ip tuntap add` works inside that namespace. It is the `wireguard` link type,
+   and only that, which is missing. Nothing else in M0–M3 was blocked by netns.
+3. A kernel capture remains the one measurement this Computer cannot take; §6 is still the
+   checklist for it, and `tests/data/README.md` records what a kernel capture would have to
+   reproduce to replace the boringtun one.
