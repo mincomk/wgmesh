@@ -13,3 +13,12 @@ workspace = true
 wgmesh-core = { path = "../wgmesh-core" }
 wgmesh-ports = { path = "../wgmesh-ports" }
 wgmesh-proto = { path = "../wgmesh-proto" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+sha2 = "0.10"
+base64ct = { version = "1", features = ["alloc"] }
+
+[dev-dependencies]
+# Only the tests need a runtime to drive the adapter: this crate is runtime agnostic, and a
+# development dependency is outside the blueprint's table.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
