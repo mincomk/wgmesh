@@ -19,7 +19,7 @@ use wgmesh_app::coordinator::ports::{
     TokenKind, TokenStore,
 };
 use wgmesh_coordinator::clock::FixedClock;
-use wgmesh_coordinator::http::watch_config;
+use wgmesh_coordinator::http::{watch_config, watch_relays};
 use wgmesh_coordinator::router;
 use wgmesh_coordinator::service::Services;
 use wgmesh_coordinator::store::Sqlite;
@@ -448,4 +448,94 @@ async fn re_homing_a_pair_changes_the_version_a_stream_pushes() {
         store.relay_for_pair(a, b).await.expect("pair"),
         Some(second)
     );
+}
+
+/// The chain, with nobody calling anything: the daemon's own sweep moves a pair
+/// off a relay that has gone quiet, that move changes the configuration version,
+/// and a streaming node is told.
+///
+/// This is the producer the version test above never had: it asserted that a
+/// re-homing changes the version, and nothing in the running coordinator ever
+/// re-homed anything.
+#[tokio::test]
+async fn the_daemons_sweep_moves_a_pair_and_a_streaming_node_is_told() {
+    let (app, store, services, network, _dir) = harness().await;
+    let first = insert_relay(&store, "relay-1").await;
+    let second = insert_relay(&store, "relay-2").await;
+    for relay in [first, second] {
+        store
+            .link_relay_network(relay, network)
+            .await
+            .expect("link");
+    }
+    let a = insert_device(&store, network, "a", 7).await;
+    let b = insert_device(&store, network, "b", 8).await;
+    let at = Millis::from_secs(NOW_SECS);
+
+    // The node that streams. It enrols before any relay has reported, so the pairs
+    // a join would place are held back: with no fresh relay there is nowhere to put
+    // them, and the store is left exactly as this test sets it up.
+    let (identity, signing) = enrol(&app, &store, network, "alpha").await;
+
+    for (relay, base) in [(first, 54_000_u16), (second, 54_100)] {
+        store.assign_slot(relay, a, base).await.expect("slot a");
+        store.assign_slot(relay, b, base + 1).await.expect("slot b");
+    }
+
+    // relay-1 has not been heard from for a minute; relay-2 has just reported.
+    store
+        .record_heartbeat(first, Millis::from_secs(NOW_SECS - 60), None)
+        .await
+        .expect("heartbeat");
+    store
+        .record_heartbeat(second, at, None)
+        .await
+        .expect("heartbeat");
+    store.assign_pair(a, b, first, at).await.expect("assign");
+    let before = store.config_version().await.expect("version");
+
+    // The watch that turns a change into a push comes up first, and its opening
+    // announcement is consumed here so the stream below cannot be handed a version
+    // it has already been told.
+    let mut updates = services.updates.subscribe();
+    let watcher = watch_config(services.clone());
+    tokio::time::timeout(Duration::from_secs(5), updates.recv())
+        .await
+        .expect("the watch announces the current version")
+        .expect("a version");
+
+    let response = app
+        .clone()
+        .oneshot(signed_get("/v1/events", &signing, &identity, "nonce-1"))
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    let opening = next_frame(&mut body).await;
+
+    // Nobody calls anything. The daemon's sweep is the only actor left.
+    let sweep = watch_relays(services.clone(), Duration::from_millis(20));
+
+    let pushed = next_frame(&mut body).await;
+    assert!(
+        pushed.contains("event: config") && pushed.contains("generation"),
+        "the re-homing was not pushed to the node: {pushed:?}"
+    );
+    assert_ne!(
+        pushed, opening,
+        "the version the stream pushes did not change when the pair moved"
+    );
+    assert_eq!(
+        store.relay_for_pair(a, b).await.expect("pair"),
+        Some(second),
+        "the daemon's sweep did not move the pair off the relay that went quiet"
+    );
+    assert_ne!(
+        store.config_version().await.expect("version"),
+        before,
+        "moving a pair to another relay must change the version a stream pushes"
+    );
+
+    sweep.abort();
+    watcher.abort();
 }

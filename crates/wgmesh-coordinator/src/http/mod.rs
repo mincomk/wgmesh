@@ -1,7 +1,9 @@
 pub mod handlers;
 
+use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -168,6 +170,72 @@ pub fn watch_config(services: Services) -> tokio::task::JoinHandle<()> {
                 // No subscribers is not an error: it means nobody is streaming.
                 let _ = services.updates.send(version);
             }
+        }
+    })
+}
+
+/// Watch the relays and move the pairs of the ones that have stopped being a
+/// place a pair may be onto another relay.
+///
+/// The daemon starts this once, alongside `watch_config`, because nothing else
+/// moves an assignment: a relay that dies, an operator's `retire`, and a relay
+/// that says it is draining all leave their pairs where they are until a sweep
+/// runs, and this is the timer that runs it. A sweep reads the relays of each
+/// network and the pairs of the ones that are leaving, and writes only what it
+/// moves, so the cadence is set by how quickly a pair should be re-homed after
+/// the deadline passes rather than by cost. `main` derives it from the window one
+/// heartbeat is given.
+pub fn watch_relays(services: Services, interval: Duration) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Not immediately, unlike `watch_config`, which has something to announce
+        // the moment it starts. A relay that has not reported since the daemon came
+        // up reads as quiet — that is what "never heard from" means — so a sweep at
+        // that instant would call every pair of the pool homeless before a single
+        // heartbeat had arrived. Waiting one interval lets the relays that are up
+        // say so first.
+        let start = tokio::time::Instant::now() + interval;
+        let mut ticker = tokio::time::interval_at(start, interval);
+        // A pair with nowhere to go stays stranded for as long as the pool has no
+        // fresh relay, so it is reported when it becomes stranded rather than on
+        // every tick that finds it so: a line per interval about a condition that
+        // has not changed is noise, and it would bury the moves that did happen.
+        let mut stranded: BTreeSet<(RelayId, DeviceId, DeviceId)> = BTreeSet::new();
+        loop {
+            ticker.tick().await;
+            let moved = match services.sweep(services.now()).await {
+                Ok(moved) => moved,
+                // A sweep that could not read the store is worth saying out loud:
+                // it means pairs are staying on relays that have gone.
+                Err(error) => {
+                    eprintln!("wgmeshd: the relay sweep failed: {error}");
+                    continue;
+                }
+            };
+            for report in &moved {
+                if let Some(to) = report.to {
+                    eprintln!(
+                        "wgmeshd: pair {} {} moved from relay {} to relay {}",
+                        naming::device_id(report.pair.0),
+                        naming::device_id(report.pair.1),
+                        naming::relay_id(report.from),
+                        naming::relay_id(to),
+                    );
+                }
+            }
+            let orphaned: BTreeSet<(RelayId, DeviceId, DeviceId)> = moved
+                .iter()
+                .filter(|report| report.to.is_none())
+                .map(|report| (report.from, report.pair.0, report.pair.1))
+                .collect();
+            for (from, left, right) in orphaned.difference(&stranded) {
+                eprintln!(
+                    "wgmeshd: pair {} {} has nowhere to go: relay {} is not a place any more and no other relay is fresh",
+                    naming::device_id(*left),
+                    naming::device_id(*right),
+                    naming::relay_id(*from),
+                );
+            }
+            stranded = orphaned;
         }
     })
 }

@@ -4,14 +4,16 @@ use std::io::Read;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use tokio::net::TcpListener;
-use wgmesh_app::coordinator::Clock;
 use wgmesh_app::coordinator::ports::{
     AuditEntry, DeviceState, Directory, Network, NewJoinToken, NewNetwork, NewRelay, RelayState,
     Reports, TokenKind, TokenStore,
 };
+use wgmesh_app::coordinator::{Clock, PlacePolicy};
+use wgmesh_config::coordinator::RelayAssignmentSection;
 use wgmesh_coordinator::clock::SystemClock;
 use wgmesh_coordinator::router;
 use wgmesh_coordinator::service::Services;
@@ -186,6 +188,34 @@ async fn main() -> ExitCode {
 const DEFAULT_DATABASE: &str = "sqlite://wgmesh-coordinator.db?mode=rwc";
 const DEFAULT_LISTEN: &str = "127.0.0.1:8080";
 
+/// How much of the window one heartbeat is given passes between two sweeps. At
+/// the shipped five seconds that is a sweep every 1.25s: often enough that a pair
+/// whose relay has gone quiet is moved a beat after its third miss rather than a
+/// window later, and the sweep itself is a handful of counts and the writes it
+/// really makes.
+const SWEEPS_PER_HEARTBEAT: u64 = 4;
+
+/// The floor under that arithmetic, so a file that sets
+/// `heartbeat_timeout_secs` to something tiny cannot turn the sweep into a spin.
+/// A zero interval would panic `tokio::time::interval` at startup.
+const MIN_SWEEP_INTERVAL: Duration = Duration::from_millis(250);
+
+fn sweep_interval(heartbeat_timeout_secs: u64) -> Duration {
+    let share =
+        Duration::from_millis(heartbeat_timeout_secs.saturating_mul(1000) / SWEEPS_PER_HEARTBEAT);
+    share.max(MIN_SWEEP_INTERVAL)
+}
+
+/// The `[relay]` table as the policy the sweep and every placement read. The
+/// reading of what a relay's last heartbeat means is the policy's alone, so the
+/// numbers are handed over whole rather than interpreted here.
+fn place_policy(relay: &RelayAssignmentSection) -> PlacePolicy {
+    PlacePolicy {
+        heartbeat_timeout: Millis::from_secs(relay.heartbeat_timeout_secs),
+        reassign_after_misses: relay.reassign_after_misses,
+    }
+}
+
 async fn run() -> Result<(), String> {
     let cli = Cli::parse();
 
@@ -224,6 +254,14 @@ async fn run() -> Result<(), String> {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let now = clock.now();
 
+    // The relay table is read whether or not a file was given: the pace the sweep
+    // runs at and the policy it sweeps by both come from it, and the section's own
+    // defaults are the ones the blueprint ships.
+    let relay = settings
+        .as_ref()
+        .map(|resolved| resolved.relay.clone())
+        .unwrap_or_default();
+
     match cli.command {
         Command::Run { listen } => {
             let listen = listen
@@ -239,8 +277,21 @@ async fn run() -> Result<(), String> {
                 services =
                     services.with_join_rate_limit(settings.policy.join_rate_limit_per_minute);
             }
-            // The configuration watch lives as long as the daemon does.
+            // The relay health policy and the lifetime of a relay's key set are the
+            // file's too. Before this both were parsed and validated and then read
+            // by nobody: a relay that died was never re-homed, and a relay kept a
+            // key set for a lifetime nobody had asked for.
+            services = services
+                .with_place_policy(place_policy(&relay))
+                .with_keyset_ttl(relay.keyset_ttl_secs);
+            // The two watches live as long as the daemon does. One announces every
+            // configuration change a stream can push; the other is what actually
+            // moves a pair off a relay that has stopped answering.
             let _watch = wgmesh_coordinator::http::watch_config(services.clone());
+            let _sweep = wgmesh_coordinator::http::watch_relays(
+                services.clone(),
+                sweep_interval(relay.heartbeat_timeout_secs),
+            );
             let app = router(services);
             let address: SocketAddr = listen.parse().map_err(|error| format!("{error}"))?;
             let listener = TcpListener::bind(address)
@@ -567,4 +618,46 @@ async fn set_relay_state(
         .map_err(|e| e.to_string())?;
     println!("{relay_id} is now {}", state.as_str());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{place_policy, sweep_interval};
+    use std::time::Duration;
+    use wgmesh_config::coordinator::RelayAssignmentSection;
+    use wgmesh_core::Millis;
+
+    #[test]
+    fn the_relay_table_becomes_the_policy_the_sweep_reads() {
+        let section = RelayAssignmentSection {
+            heartbeat_timeout_secs: 2,
+            reassign_after_misses: 4,
+            keyset_ttl_secs: 90,
+        };
+        let policy = place_policy(&section);
+        assert_eq!(policy.heartbeat_timeout, Millis::from_secs(2));
+        assert_eq!(policy.reassign_after_misses, 4);
+        assert_eq!(
+            policy.stale_after(),
+            Millis::from_millis(8_000),
+            "four misses of a two-second window is an eight-second deadline"
+        );
+    }
+
+    #[test]
+    fn the_shipped_file_is_the_shipped_deadline() {
+        let policy = place_policy(&RelayAssignmentSection::default());
+        assert_eq!(policy.heartbeat_timeout, Millis::from_secs(5));
+        assert_eq!(policy.reassign_after_misses, 3);
+        assert_eq!(policy.stale_after(), Millis::from_millis(15_000));
+    }
+
+    #[test]
+    fn the_sweep_runs_several_times_inside_one_heartbeat_window() {
+        assert_eq!(sweep_interval(5), Duration::from_millis(1_250));
+        assert!(sweep_interval(5) * 4 <= Duration::from_secs(5));
+        // A file that sets the window to nothing cannot make the sweep spin, and a
+        // zero interval would panic the timer at startup.
+        assert_eq!(sweep_interval(0), Duration::from_millis(250));
+    }
 }

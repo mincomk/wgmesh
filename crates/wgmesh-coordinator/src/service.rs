@@ -7,7 +7,7 @@ use wgmesh_app::coordinator::PortError;
 use wgmesh_app::coordinator::ports::{AuditEntry, DeviceState, Directory, Placement, Reports};
 use wgmesh_app::coordinator::{
     ApproveDevice, AssignPair, BuildConfig, IngestHeartbeat, JoinDevice, JoinPolicy, PlacePolicy,
-    PunchReport, RecordObservations, SelectRelay,
+    PunchReport, RecordObservations, RehomeReport, ReportError, SelectRelay,
 };
 use wgmesh_core::{DeviceId, Millis, RelayId};
 
@@ -59,6 +59,24 @@ impl Services {
     /// `[policy] join_rate_limit_per_minute` calls this once at startup.
     pub fn with_join_rate_limit(mut self, per_minute: u32) -> Self {
         self.join_rate_limit_per_minute = per_minute;
+        self
+    }
+
+    /// The same services with the relay health policy the coordinator's `[relay]`
+    /// table states, which is what decides whether a relay is still a place a pair
+    /// may be. A daemon that reads `heartbeat_timeout_secs` and
+    /// `reassign_after_misses` calls this once at startup; without it the
+    /// daemon's own defaults apply and the operator's numbers reach nothing.
+    pub fn with_place_policy(mut self, policy: PlacePolicy) -> Self {
+        self.place_policy = policy;
+        self
+    }
+
+    /// The same services with the lifetime the coordinator hands a relay's copy of
+    /// the key set. `[relay] keyset_ttl_secs` is what a relay keeps serving for
+    /// after the coordinator goes away, so a daemon that reads it calls this.
+    pub fn with_keyset_ttl(mut self, secs: u64) -> Self {
+        self.keyset_ttl_secs = secs;
         self
     }
 
@@ -127,6 +145,18 @@ impl Services {
             clock: &*self.clock,
             policy: self.place_policy,
         }
+    }
+
+    /// Move the pairs of every relay that has stopped being a place a pair may be
+    /// — retired, draining, or gone quiet — onto another relay, and say what moved.
+    ///
+    /// This is the only thing in the process that ever moves an assignment: a pair
+    /// is placed once when it is made and stays where it is until it is swept. So
+    /// a relay that dies costs its own pairs only if this is called on a timer, and
+    /// the daemon's timer is `http::watch_relays`. The reading of what "gone quiet"
+    /// means is `PlacePolicy`'s and is not re-derived here.
+    pub async fn sweep(&self, now: Millis) -> Result<Vec<RehomeReport>, ReportError> {
+        self.ingest_heartbeat().sweep(now).await
     }
 
     /// A punch result is a report, not a decision: the agent owns the direct
