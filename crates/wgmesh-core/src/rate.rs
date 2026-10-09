@@ -27,8 +27,8 @@ pub struct TokenBucket {
     tokens: f64,
     refill_per_ms: f64,
     refilled_at: u64,
-    /// When this bucket was last consulted, which is what a key is forgotten
-    /// by: the least recently used one goes first.
+    /// When this bucket was last consulted, which is half of what decides
+    /// whether it may be forgotten: see `is_idle`.
     touched_at: u64,
 }
 
@@ -102,7 +102,9 @@ impl TokenBucket {
 /// Keys that have refilled and gone quiet are dropped once the map grows past
 /// `max_keys`, so an unfriendly client cannot grow it without bound. A key
 /// still inside its window is never dropped: dropping it would hand the caller
-/// a fresh allowance.
+/// a fresh allowance. When the map is full of such keys, a key nobody has
+/// counted yet is answered and not remembered — see `take` — rather than
+/// admitted by forgetting a key whose window is still open.
 #[derive(Clone, Debug)]
 pub struct Metered<K> {
     buckets: HashMap<K, TokenBucket>,
@@ -123,16 +125,27 @@ impl<K: Eq + Hash + Copy> Metered<K> {
 
     pub fn take(&mut self, key: K, amount: f64, now_ms: u64) -> Admission {
         let capacity = self.capacity;
-        let decision = match self.buckets.get_mut(&key) {
-            Some(bucket) => bucket.take_or_leave(amount, now_ms),
-            None => {
-                let mut bucket = TokenBucket::new(capacity, self.window_ms);
-                let decision = bucket.take_or_leave(amount, now_ms);
-                self.buckets.insert(key, bucket);
-                decision
-            }
-        };
-        self.prune(now_ms, key);
+        if let Some(decision) = self
+            .buckets
+            .get_mut(&key)
+            .map(|bucket| bucket.take_or_leave(amount, now_ms))
+        {
+            return decision;
+        }
+        // A key nobody has counted yet. It is answered from a full bucket, and then remembered
+        // only if the map has room: room is made by forgetting keys that are safe to forget, and
+        // never by forgetting one that is still inside its window, because that would hand *its*
+        // caller a fresh allowance. So a key that arrives while every entry is still fresh is
+        // answered and forgotten, and its next request starts from a full bucket exactly as this
+        // one did.
+        let mut bucket = TokenBucket::new(capacity, self.window_ms);
+        let decision = bucket.take_or_leave(amount, now_ms);
+        if self.buckets.len() >= self.max_keys {
+            self.forget_the_quiet_ones(now_ms);
+        }
+        if self.buckets.len() < self.max_keys {
+            self.buckets.insert(key, bucket);
+        }
         decision
     }
 
@@ -148,36 +161,20 @@ impl<K: Eq + Hash + Copy> Metered<K> {
         self.buckets.len()
     }
 
-    fn prune(&mut self, now_ms: u64, keep: K) {
-        if self.buckets.len() <= self.max_keys {
-            return;
-        }
+    /// Forget every key that is safe to forget.
+    ///
+    /// A key goes only when it has refilled *and* has not been consulted for longer than its own
+    /// window: its next request would be handed a full bucket anyway, so nothing is given away by
+    /// forgetting it. A key still inside its window is kept, however many keys tie with it —
+    /// forgetting one would hand its caller a fresh allowance, which is the one thing this must
+    /// not do. So a map that filled up with fresh keys comes back under `max_keys` as they go
+    /// quiet, and `take` is what keeps it from growing past `max_keys` before then.
+    fn forget_the_quiet_ones(&mut self, now_ms: u64) {
         let idle = self.window_ms;
         let capacity = self.capacity;
         self.buckets.retain(|_, bucket| {
             !(bucket.projected(now_ms) >= capacity && bucket.is_idle(now_ms, idle))
         });
-        if self.buckets.len() <= self.max_keys {
-            return;
-        }
-        let excess = self.buckets.len() - self.max_keys;
-        // Oldest first, by when the key was last consulted. A key that was
-        // just asked about is therefore never the one dropped, which matters:
-        // dropping it would hand the caller a fresh allowance.
-        // Oldest first, by when the key was last consulted — and never the key
-        // in hand. Every key touched at the same millisecond ties, and on a tie
-        // the order is `HashMap`'s; dropping the caller's own key would hand it
-        // a fresh allowance, which is the one thing this must not do.
-        let mut by_age: Vec<(K, u64)> = self
-            .buckets
-            .iter()
-            .filter(|(key, _)| **key != keep)
-            .map(|(key, bucket)| (*key, bucket.touched_at))
-            .collect();
-        by_age.sort_by_key(|(_, touched_at)| *touched_at);
-        for (key, _) in by_age.into_iter().take(excess) {
-            self.buckets.remove(&key);
-        }
     }
 }
 
@@ -262,27 +259,77 @@ mod tests {
         assert_eq!(metered.projected(7, 0), 30.0);
     }
 
+    /// A flood of fresh keys is not pruned — there is nothing safe to prune — so the map holds
+    /// its ceiling by not admitting more than it can hold, and comes back down once its keys go
+    /// quiet.
     #[test]
-    fn idle_keys_are_pruned_once_the_map_is_full() {
+    fn keys_that_have_gone_quiet_are_pruned_once_the_map_is_full() {
         let mut metered = Metered::new(10.0, 60_000, 8);
         for key in 0..64u32 {
             metered.take(key, 1.0, 0);
         }
-        assert!(metered.tracked_keys() <= 8);
+        assert!(
+            metered.tracked_keys() <= 8,
+            "the map grew past its ceiling: {}",
+            metered.tracked_keys()
+        );
         assert!(metered.take(999, 1.0, 0).is_allowed());
+
+        // A window later every key it holds has refilled and gone quiet, so they are forgotten
+        // and a new key has the room to be remembered.
+        assert!(metered.take(1000, 1.0, 120_000).is_allowed());
+        assert_eq!(
+            metered.projected(1000, 120_000),
+            9.0,
+            "the new key took the room the quiet keys left"
+        );
     }
 
+    /// The rule the pruning exists for: a key that has spent its window is still in the map when
+    /// it comes back, so its next request is refused rather than handed a fresh bucket. The map
+    /// is full of keys that are all inside their windows, so the key that arrives is the one that
+    /// goes without being remembered.
     #[test]
-    fn the_key_in_hand_is_never_the_one_dropped_when_the_map_is_full() {
-        // One key in the map, and two units of allowance: every call after the
-        // first is over capacity, so a call that dropped its own key would hand
-        // itself a fresh bucket — and the refusal below would never come.
+    fn a_key_inside_its_window_is_not_forgotten_to_make_room() {
+        let mut metered = Metered::new(2.0, 60_000, 2);
+        assert!(metered.take(1u32, 1.0, 0).is_allowed());
+        assert!(metered.take(1u32, 1.0, 0).is_allowed());
+        metered.take(2u32, 1.0, 0);
+
+        assert!(
+            metered.take(3u32, 1.0, 0).is_allowed(),
+            "a new key starts full"
+        );
+        assert_eq!(metered.tracked_keys(), 2, "and is not remembered");
+        assert_eq!(metered.projected(3, 0), 2.0, "so it is not there");
+        assert!(
+            matches!(metered.take(1u32, 1.0, 10), Admission::Deny { .. }),
+            "the key that had spent its window came back full, not empty"
+        );
+    }
+
+    /// The same rule at a ceiling of one: the key in the one slot keeps it, and the key that
+    /// arrives is answered and forgotten rather than admitted over a window that is still open.
+    #[test]
+    fn a_key_that_arrives_at_a_full_map_is_answered_and_not_remembered() {
         let mut metered = Metered::new(2.0, 60_000, 1);
         assert!(metered.take(1u32, 1.0, 0).is_allowed());
-        assert!(metered.take(2u32, 1.0, 0).is_allowed());
-        assert!(metered.take(2u32, 1.0, 0).is_allowed());
-        assert!(matches!(metered.take(2u32, 1.0, 0), Admission::Deny { .. }));
-        assert!(metered.tracked_keys() <= 2);
+        assert!(metered.take(1u32, 1.0, 0).is_allowed());
+
+        assert!(
+            metered.take(2u32, 1.0, 0).is_allowed(),
+            "a new key starts full"
+        );
+        assert_eq!(
+            metered.tracked_keys(),
+            1,
+            "the slot is the key already in it"
+        );
+        assert_eq!(metered.projected(2, 0), 2.0, "key 2 was not remembered");
+        assert!(
+            matches!(metered.take(1u32, 1.0, 0), Admission::Deny { .. }),
+            "key 1 kept the allowance it had spent"
+        );
     }
 
     #[test]
