@@ -580,3 +580,62 @@ fn base64_decode(text: &str) -> Vec<u8> {
     }
     out
 }
+
+/// The four routing and forwarding misconfigurations, each reported by name.
+///
+/// The peer-dependent two need the coordinator's answer, which a snapshot file
+/// supplies — the same body `GET /v1/config` returns.
+#[test]
+fn doctor_catches_the_routing_misconfigurations_a_snapshot_shows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[coordinator]\nurl = \"https://wgmesh.example.com\"\nspki_sha256 = \"{GOOD_SPKI}\"\n\n\
+             [state]\ndir = \"{}\"\n\n\
+             [route]\ntable = \"off\"\n",
+            state_dir(dir.path()).display()
+        ),
+    );
+    let snapshot = dir.path().join("snapshot.json");
+    std::fs::write(
+        &snapshot,
+        r#"{
+  "network": {"id": 1, "name": "prod", "cidr": "10.77.0.0/16", "mtu": 1420, "relay_policy": "any"},
+  "me": {"device_id": "d_self", "tunnel_ip": "10.77.0.7/16", "state": "active"},
+  "peers": [
+    {"device_id": "d_a", "name": "router-a", "wg_pubkey": "AAAA", "tunnel_ip": "10.77.0.8/16",
+     "advertised": ["0.0.0.0/0"], "state": "active"},
+    {"device_id": "d_b", "name": "router-b", "wg_pubkey": "BBBB", "tunnel_ip": "10.77.0.9/16",
+     "advertised": ["0.0.0.0/0"], "state": "active"}
+  ]
+}"#,
+    )
+    .expect("the snapshot is written");
+
+    // A doctor that finds something says so in its exit code as well as its document.
+    let assertion = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "doctor", "--json"])
+        .arg("--snapshot")
+        .arg(&snapshot)
+        .assert()
+        .failure();
+    let out = assertion.get_output().stdout.clone();
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("valid json on stdout");
+    let names: Vec<&str> = value["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .filter_map(|check| check["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"catch-all-on-multiple-peers"),
+        "the two catch-alls were not reported: {names:?}"
+    );
+    assert!(
+        names.contains(&"routes-needed-but-table-off"),
+        "the unmanaged table was not reported: {names:?}"
+    );
+}
