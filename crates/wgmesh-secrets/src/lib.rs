@@ -129,6 +129,21 @@ impl std::error::Error for SecretError {
     }
 }
 
+/// Check an Ed25519 signature against a public key the store already holds.
+///
+/// This is the one operation that has to be right: a private key never leaves
+/// the machine it was generated on, and everything else about authentication is
+/// bookkeeping around this call.
+pub fn verify(public_key: &wgmesh_core::PublicKey, message: &[u8], signature: &[u8]) -> bool {
+    let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(public_key.as_bytes()) else {
+        return false;
+    };
+    let Ok(signature) = ed25519_dalek::Signature::from_slice(signature) else {
+        return false;
+    };
+    key.verify_strict(message, &signature).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,19 +175,4 @@ mod tests {
             other => panic!("expected the original error, got {other:?}"),
         }
     }
-}
-
-/// Check an Ed25519 signature against a public key the store already holds.
-///
-/// This is the one operation that has to be right: a private key never leaves
-/// the machine it was generated on, and everything else about authentication is
-/// bookkeeping around this call.
-pub fn verify(public_key: &wgmesh_core::PublicKey, message: &[u8], signature: &[u8]) -> bool {
-    let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(public_key.as_bytes()) else {
-        return false;
-    };
-    let Ok(signature) = ed25519_dalek::Signature::from_slice(signature) else {
-        return false;
-    };
-    key.verify_strict(message, &signature).is_ok()
 }
