@@ -299,7 +299,7 @@ where
     /// Move the pinned coordination-plane key.
     ///
     /// This is the only thing in the agent that writes the pin after enrollment, and it is what
-    /// `wgmesh trust --rotate` runs. There is no path that rotates the pin as a consequence of a
+    /// `wgmesh trust rotate` runs. There is no path that rotates the pin as a consequence of a
     /// failed connection: a coordinator that presents the wrong key is one this device refuses to
     /// talk to, not one it learns to trust.
     pub fn rotate_trust(&self, spki: Spki) -> Result<PersistedState, AppError> {

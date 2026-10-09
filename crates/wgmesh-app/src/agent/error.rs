@@ -16,7 +16,7 @@ pub enum AppError {
     /// The state pins one coordination-plane key and the configuration expects another.
     ///
     /// This stops the work. It is never retried, never downgraded to a warning, and the pin is
-    /// never moved as a consequence of trying again: `wgmesh trust --rotate` is the only thing
+    /// never moved as a consequence of trying again: `wgmesh trust rotate` is the only thing
     /// that moves it.
     TrustMismatch {
         /// The key the state was enrolled under.
@@ -67,7 +67,7 @@ impl fmt::Display for AppError {
             Self::TrustMismatch { pinned, configured } => write!(
                 f,
                 "the state pins the coordination-plane key {pinned} but the configuration \
-                 expects {configured}; rotate the pin deliberately with `wgmesh trust --rotate`"
+                 expects {configured}; rotate the pin deliberately with `wgmesh trust rotate --yes`"
             ),
             Self::MissingJoinToken => {
                 f.write_str("there is no state to resume from and no join token to enroll with")

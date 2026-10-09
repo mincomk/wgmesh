@@ -15,6 +15,9 @@ use predicates::prelude::*;
 
 const GOOD_SPKI: &str = "9f2cbb9d3b5e1d4a0f7c6e5d4c3b2a1908172635445362718091a2b3c4d5e6f7";
 
+/// What the coordinator's key looks like after it has been replaced.
+const OTHER_SPKI: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
 /// A 32 byte key, base64, the way `wg genkey` writes one.
 const A_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
@@ -465,6 +468,96 @@ fn the_pipeline_enrols_runs_and_reports_each_peer() {
     assert_eq!(peer["path"], "direct", "{value}");
     assert_eq!(peer["endpoint"], "203.0.113.9:41287", "{value}");
     assert!(peer["handshake_age_secs"].is_number(), "{value}");
+}
+
+/// The pin is the coordinator's identity as this device knows it. A configuration that disagrees
+/// with the state stops the work, and the only thing that moves it is a rotation asked for by name.
+#[test]
+fn trust_rotate_moves_the_pin_and_the_old_one_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = minimal_config(dir.path());
+    write_world(dir.path());
+    let state = state_dir(dir.path());
+
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "join", "--token", "tok"])
+        .assert()
+        .success();
+
+    // Enrolled against the configured pin, the two agree.
+    let view = trust_view(&config);
+    assert_eq!(view["pinned"], GOOD_SPKI, "{view}");
+    assert_eq!(view["configured"], GOOD_SPKI, "{view}");
+    assert_eq!(view["matches"], true, "{view}");
+
+    // The coordinator's key was replaced: the configuration says so and the state still holds the
+    // old one, which is exactly the moment the pin is for.
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[coordinator]\nurl = \"https://wgmesh.example.com\"\nspki_sha256 = \"{OTHER_SPKI}\"\n\n\
+             [state]\ndir = \"{}\"\n",
+            state.display()
+        ),
+    );
+    let view = trust_view(&config);
+    assert_eq!(view["pinned"], GOOD_SPKI, "{view}");
+    assert_eq!(view["configured"], OTHER_SPKI, "{view}");
+    assert_eq!(view["matches"], false, "{view}");
+
+    // Holding the old pin, the agent refuses to run, and it does not rotate the pin for itself.
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pins the coordination-plane key"))
+        .stderr(predicate::str::contains("trust rotate"));
+
+    // The rotation is asked for by name, and then the agent runs.
+    bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "trust", "rotate", "--yes"])
+        .assert()
+        .success();
+
+    let view = trust_view(&config);
+    assert_eq!(view["pinned"], OTHER_SPKI, "{view}");
+    assert_eq!(view["matches"], true, "{view}");
+
+    let mut child = bin()
+        .arg("--config")
+        .arg(&config)
+        .args(["--backend", "simulated", "run"])
+        .spawn()
+        .expect("the agent starts");
+    // Convergence writes the peer it programmed into the state file, which it can only reach with
+    // the pin agreeing.
+    wait_for(
+        &state.join("state.json"),
+        &|text| text.contains("\"id\": \"8\""),
+        "the daemon to converge under the new pin",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `wgmesh trust show --json`.
+fn trust_view(config: &Path) -> serde_json::Value {
+    let out = bin()
+        .arg("--config")
+        .arg(config)
+        .args(["--backend", "simulated", "trust", "show", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("valid json on stdout")
 }
 
 /// One agent per host: the second refuses to start rather than program the same interface, and a

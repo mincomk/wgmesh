@@ -160,7 +160,7 @@ pub trait CoordinatorApi: Send + Sync {
 
     /// Rotate the pin the coordinator presents.
     ///
-    /// A trust decision, and an explicit one: `wgmesh trust --rotate` is the only thing that
+    /// A trust decision, and an explicit one: `wgmesh trust rotate` is the only thing that
     /// calls it, and nothing in the agent calls it because a connection failed.
     async fn rotate(&self, key: PublicKey) -> Result<(), ApiError>;
 }

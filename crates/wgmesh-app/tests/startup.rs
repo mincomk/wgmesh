@@ -191,7 +191,7 @@ fn a_start_enrolls_converges_and_reaches_the_kernel() {
     );
 }
 
-/// A pin that disagrees with the configuration stops the work, and only `trust --rotate` moves it.
+/// A pin that disagrees with the configuration stops the work, and only `trust rotate` moves it.
 #[test]
 fn a_pin_that_disagrees_with_the_state_stops_the_work() {
     let fixture = Fixture::new();
