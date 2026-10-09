@@ -36,3 +36,6 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 serde_json = "1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+# The revocation acceptance test carries the coordinator's answer onto an interface, so it
+# needs the in-memory WireGuard the ports crate already ships.
+wgmesh-ports = { path = "../wgmesh-ports" }
