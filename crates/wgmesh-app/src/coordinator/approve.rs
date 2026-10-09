@@ -3,7 +3,7 @@ use wgmesh_ports::Clock;
 use wgmesh_ports::coordinator::{AuditEntry, Device, DeviceState, Directory, Placement, Reports};
 
 use super::placement::{ensure_slots, pair_with_network};
-use super::types::{ApproveError, PlaceError};
+use super::types::{ApproveError, PlaceError, PlacePolicy};
 
 /// Move a device from `pending` to `active`, and give it its slots and its
 /// pairs.
@@ -16,6 +16,7 @@ pub struct ApproveDevice<'a> {
     pub placement: &'a dyn Placement,
     pub reports: &'a dyn Reports,
     pub clock: &'a dyn Clock,
+    pub policy: PlacePolicy,
 }
 
 impl ApproveDevice<'_> {
@@ -58,9 +59,15 @@ impl ApproveDevice<'_> {
         ensure_slots(self.directory, self.placement, &updated)
             .await
             .map_err(map_placement)?;
-        pair_with_network(self.directory, self.placement, self.clock, &updated)
-            .await
-            .map_err(map_placement)?;
+        pair_with_network(
+            self.directory,
+            self.placement,
+            self.clock,
+            self.policy,
+            &updated,
+        )
+        .await
+        .map_err(map_placement)?;
 
         self.directory
             .device_by_id(device)

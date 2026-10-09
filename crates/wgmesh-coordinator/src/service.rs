@@ -49,6 +49,7 @@ impl Services {
             reports: &*self.store,
             clock: &*self.clock,
             policy: self.join_policy,
+            place_policy: self.place_policy,
         }
     }
 
@@ -58,6 +59,7 @@ impl Services {
             placement: &*self.store,
             reports: &*self.store,
             clock: &*self.clock,
+            policy: self.place_policy,
         }
     }
 
@@ -67,6 +69,7 @@ impl Services {
             placement: &*self.store,
             reports: &*self.store,
             clock: &*self.clock,
+            policy: self.place_policy,
         }
     }
 
@@ -92,6 +95,7 @@ impl Services {
             directory: &*self.store,
             placement: &*self.store,
             clock: &*self.clock,
+            policy: self.place_policy,
         }
     }
 
@@ -100,6 +104,7 @@ impl Services {
             directory: &*self.store,
             placement: &*self.store,
             clock: &*self.clock,
+            policy: self.place_policy,
         }
     }
 

@@ -6,17 +6,18 @@
 // The reference is the relay-fleet lab, where a pair re-homed off a dead relay recovers
 // in 0.3s. What these tests put under assertion is the coordinator half of that: three
 // missed heartbeats move a pair, the pair left on another relay does not move, a working
-// pair is never disturbed by a relay that is merely back, and a relay that says it is
-// draining hands its pairs over and takes no new ones.
+// pair is never disturbed by a relay that is merely back, a relay that says it is
+// draining hands its pairs over and takes no new ones, and a relay that has been retired
+// does not keep the pairs it was carrying.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use wgmesh_app::coordinator::Heartbeat;
 use wgmesh_app::coordinator::ports::{
     DeviceState, Directory, NewDevice, NewNetwork, NewRelay, Placement, RelayState,
 };
-use wgmesh_app::coordinator::{Heartbeat, PlacePolicy};
 use wgmesh_coordinator::clock::FixedClock;
 use wgmesh_coordinator::service::Services;
 use wgmesh_coordinator::store::Sqlite;
@@ -32,20 +33,20 @@ const LOCAL: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const T0: u64 = 1_760_000_000_000;
 const LONG: Duration = Duration::from_secs(2);
 
-// The coordinator's own policy: 15s between heartbeats, and a relay is gone after three
-// of them in a row are missed.
-fn policy() -> PlacePolicy {
-    PlacePolicy::default()
-}
+/// The cadence a relay reports at, as the design has it: one heartbeat every five
+/// seconds. The scenario below is written in these beats rather than in the policy's own
+/// arithmetic, so a deadline that stopped meaning "three missed heartbeats" would fail
+/// these assertions instead of moving them along with it.
+const HEARTBEAT: Duration = Duration::from_secs(5);
 
-fn gone_after() -> Duration {
-    let policy = policy();
-    Duration::from_millis(policy.heartbeat_timeout.0 * u64::from(policy.reassign_after_misses))
-}
+/// A heartbeat is judged missed once its window has passed, so every check sits a little
+/// after the beat it is asking about.
+const OVERDUE: Duration = Duration::from_secs(1);
 
 struct Fleet {
     store: Arc<Sqlite>,
     services: Services,
+    clock: Arc<FixedClock>,
     network: u32,
     _dir: tempfile::TempDir,
 }
@@ -70,10 +71,11 @@ impl Fleet {
             .await
             .expect("network");
         let clock = Arc::new(FixedClock::new(Millis::from_millis(T0)));
-        let services = Services::new(store.clone(), clock);
+        let services = Services::new(store.clone(), clock.clone());
         Self {
             store,
             services,
+            clock,
             network: network.id,
             _dir: dir,
         }
@@ -167,6 +169,12 @@ impl Fleet {
 
     fn now(&self) -> Millis {
         self.services.clock.now()
+    }
+
+    /// Move the coordinator's own clock to `at`, so the sweep and the choice that places a
+    /// pair read the same moment.
+    fn advance_to(&self, at: Millis) {
+        self.clock.set(at);
     }
 
     /// The assignment the coordinator actually answers `GET /v1/relay/assignment` with.
@@ -338,6 +346,39 @@ fn carry_traffic(
     relay.pump_until(at, 1);
 }
 
+/// Both sides of a pair are pointed at the same relay: one side alone is not a path.
+async fn assert_both_peers_use(fleet: &Fleet, a: DeviceId, b: DeviceId, relay: RelayId) {
+    let config_a = fleet
+        .services
+        .build_config()
+        .execute(a)
+        .await
+        .expect("config a");
+    let config_b = fleet
+        .services
+        .build_config()
+        .execute(b)
+        .await
+        .expect("config b");
+    let peer_b = config_a
+        .peers
+        .iter()
+        .find(|peer| peer.id == b)
+        .expect("b is a peer of a");
+    let peer_a = config_b
+        .peers
+        .iter()
+        .find(|peer| peer.id == a)
+        .expect("a is a peer of b");
+    assert_eq!(peer_b.relay, Some(relay));
+    assert_eq!(peer_a.relay, Some(relay));
+    assert_eq!(peer_b.relay, peer_a.relay);
+    assert!(
+        peer_b.endpoint.is_some() && peer_a.endpoint.is_some(),
+        "both sides are pointed at a slot on that relay"
+    );
+}
+
 #[tokio::test]
 async fn three_missed_heartbeats_re_home_the_pair_and_the_path_recovers() {
     let fleet = Fleet::new().await;
@@ -374,97 +415,83 @@ async fn three_missed_heartbeats_re_home_the_pair_and_the_path_recovers() {
     carry_traffic(&mut two, &pc, &pd, c, d, at);
     assert!(pd.recv_within(LONG).is_some(), "relay-2 carries (c,d)");
 
-    // relay-1 stops answering. The other two keep reporting, so only the one relay is
-    // late -- which is exactly what a broken relay looks like from the control plane.
-    let later = at.plus(gone_after() + Duration::from_secs(1));
-    fleet.heartbeat(relay_two, false, later).await;
-    fleet.heartbeat(relay_three, false, later).await;
+    // relay-1 stops answering. The other two keep reporting on every beat, so from the
+    // control plane this is exactly a relay that has gone quiet -- and the first two
+    // missed beats are not enough to move anything.
+    for miss in 1..=3u32 {
+        let beat = at.plus(HEARTBEAT * miss);
+        fleet.advance_to(beat);
+        fleet.heartbeat(relay_two, false, beat).await;
+        fleet.heartbeat(relay_three, false, beat).await;
 
-    let moved = fleet
-        .services
-        .ingest_heartbeat()
-        .sweep(later)
-        .await
-        .expect("sweep");
+        let checked = beat.plus(OVERDUE);
+        let moved = fleet
+            .services
+            .ingest_heartbeat()
+            .sweep(checked)
+            .await
+            .expect("sweep");
 
-    assert_eq!(
-        moved.len(),
-        1,
-        "only the pair on the relay that went quiet moves: {moved:?}"
-    );
-    assert_eq!(moved[0].from, relay_one);
-    assert_eq!(moved[0].to, Some(relay_three));
-    assert_eq!(fleet.pair_relay(a, b).await, Some(relay_three));
-    assert_eq!(
-        fleet.pair_relay(c, d).await,
-        Some(relay_two),
-        "the pair on the relay that was never late keeps its assignment"
-    );
+        if miss < 3 {
+            assert!(
+                moved.is_empty(),
+                "after {miss} missed heartbeat(s) nothing has moved: {moved:?}"
+            );
+            assert_eq!(fleet.pair_relay(a, b).await, Some(relay_one));
+            continue;
+        }
 
-    // Both peers are given the same relay. One side alone is not a path.
-    let config_a = fleet
-        .services
-        .build_config()
-        .execute(a)
-        .await
-        .expect("config a");
-    let config_b = fleet
-        .services
-        .build_config()
-        .execute(b)
-        .await
-        .expect("config b");
-    let peer_b = config_a
-        .peers
-        .iter()
-        .find(|peer| peer.id == b)
-        .expect("b is a peer of a");
-    let peer_a = config_b
-        .peers
-        .iter()
-        .find(|peer| peer.id == a)
-        .expect("a is a peer of b");
-    assert_eq!(peer_b.relay, Some(relay_three));
-    assert_eq!(peer_a.relay, Some(relay_three));
-    assert_eq!(peer_b.relay, peer_a.relay);
-    assert!(
-        peer_b.endpoint.is_some() && peer_a.endpoint.is_some(),
-        "both sides are pointed at a slot on that relay"
-    );
+        assert_eq!(
+            moved.len(),
+            1,
+            "the third missed heartbeat moves the pair on that relay and no other: {moved:?}"
+        );
+        assert_eq!(moved[0].from, relay_one);
+        assert_eq!(moved[0].to, Some(relay_three));
+        assert_eq!(fleet.pair_relay(a, b).await, Some(relay_three));
+        assert_eq!(
+            fleet.pair_relay(c, d).await,
+            Some(relay_two),
+            "the pair on the relay that was never late keeps its assignment"
+        );
 
-    // The path comes back: the new relay is handed the pair, and traffic crosses it.
-    let mut three = RelayHost::start("relay-3");
-    let reassigned = fleet.assignment(relay_three).await;
-    assert!(
-        reassigned
-            .pairs
-            .iter()
-            .any(|pair| pair.device_a == a.0 && pair.device_b == b.0),
-        "the new relay is told about the pair"
-    );
-    three.apply(reassigned, later);
-    carry_traffic(&mut three, &pa, &pb, a, b, later);
-    assert!(
-        pb.recv_within(LONG).is_some(),
-        "the pair works on the relay it was moved to"
-    );
+        // Both peers are given the same relay. One side alone is not a path.
+        assert_both_peers_use(&fleet, a, b, relay_three).await;
 
-    // The relay it left is no longer handed the pair...
-    let stale = fleet.assignment(relay_one).await;
-    assert!(
-        !stale
-            .pairs
-            .iter()
-            .any(|pair| pair.device_a == a.0 && pair.device_b == b.0),
-        "the relay that went quiet is not told to carry the pair any more"
-    );
+        // The path comes back: the new relay is handed the pair, and traffic crosses it.
+        let mut three = RelayHost::start("relay-3");
+        let reassigned = fleet.assignment(relay_three).await;
+        assert!(
+            reassigned
+                .pairs
+                .iter()
+                .any(|pair| pair.device_a == a.0 && pair.device_b == b.0),
+            "the new relay is told about the pair"
+        );
+        three.apply(reassigned, checked);
+        carry_traffic(&mut three, &pa, &pb, a, b, checked);
+        assert!(
+            pb.recv_within(LONG).is_some(),
+            "the pair works on the relay it was moved to"
+        );
 
-    // ...and the pair that stayed where it was still works on its own relay: both
-    // directions cross it, and nothing else does.
-    let before = two.self_forwarded();
-    carry_traffic(&mut two, &pc, &pd, c, d, later);
-    assert!(pd.recv_within(LONG).is_some());
-    assert_eq!(two.self_forwarded(), before + 2);
+        // The relay it left is no longer handed the pair...
+        let stale = fleet.assignment(relay_one).await;
+        assert!(
+            !stale
+                .pairs
+                .iter()
+                .any(|pair| pair.device_a == a.0 && pair.device_b == b.0),
+            "the relay that went quiet is not told to carry the pair any more"
+        );
+
+        // ...and the pair that stayed where it was still works on its own relay: both
+        // directions cross it, and nothing else does.
+        let before = two.self_forwarded();
+        carry_traffic(&mut two, &pc, &pd, c, d, checked);
+        assert!(pd.recv_within(LONG).is_some());
+        assert_eq!(two.self_forwarded(), before + 2);
+    }
 }
 
 #[tokio::test]
@@ -547,6 +574,7 @@ async fn a_draining_relay_hands_its_pairs_over_and_takes_no_new_ones() {
     // The operator runs `wgmesh-relayd drain` on relay-1; the relay says so on its next
     // heartbeat, and that is the whole notification the coordinator needs.
     let draining = at.plus(Duration::from_secs(5));
+    fleet.advance_to(draining);
     fleet.heartbeat(relay_one, true, draining).await;
     assert!(fleet.is_draining(relay_one).await);
 
@@ -569,6 +597,7 @@ async fn a_draining_relay_hands_its_pairs_over_and_takes_no_new_ones() {
         Some(relay_two),
         "another relay's pair is untouched by the drain"
     );
+    assert_both_peers_use(&fleet, a, b, relay_three).await;
 
     // And no new pair is placed on a relay that is on its way out.
     let new_pair = fleet.assign(a, c).await;
@@ -577,8 +606,71 @@ async fn a_draining_relay_hands_its_pairs_over_and_takes_no_new_ones() {
 
     // Clearing the drain puts it back in service.
     let back = draining.plus(Duration::from_secs(5));
+    fleet.advance_to(back);
     fleet.heartbeat(relay_one, false, back).await;
     assert!(!fleet.is_draining(relay_one).await);
+}
+
+#[tokio::test]
+async fn a_retired_relay_hands_its_pairs_over_instead_of_keeping_them() {
+    let fleet = Fleet::new().await;
+    let relay_one = fleet.relay("relay-1", "198.51.100.4").await;
+    let relay_two = fleet.relay("relay-2", "198.51.100.5").await;
+    fleet.relay("relay-3", "198.51.100.6").await;
+
+    let a = fleet.device("a", 1).await;
+    let b = fleet.device("b", 2).await;
+
+    let at = fleet.now();
+    for (index, relay) in relays(&fleet).await.into_iter().enumerate() {
+        fleet
+            .slots(relay, &[a, b], 54_000 + 100 * index as u16)
+            .await;
+        fleet.heartbeat(relay, false, at).await;
+    }
+    assert_eq!(fleet.assign(a, b).await, Some(relay_one));
+
+    // An operator retires relay-1: the pool stops offering it, and its pairs have to
+    // leave. Nothing else moves an assignment, so a sweep that skipped a relay for not
+    // being `Active` would strand this pair for good -- both peers pointed at a relay
+    // that no longer gives them a slot.
+    fleet
+        .store
+        .set_relay_state(relay_one, RelayState::Retired)
+        .await
+        .expect("retire");
+
+    let moved = fleet
+        .services
+        .ingest_heartbeat()
+        .sweep(at.plus(OVERDUE))
+        .await
+        .expect("sweep");
+    assert_eq!(
+        moved.len(),
+        1,
+        "a retired relay hands its pair over: {moved:?}"
+    );
+    assert_eq!(moved[0].from, relay_one);
+    assert_eq!(moved[0].to, Some(relay_two));
+    assert_eq!(fleet.pair_relay(a, b).await, Some(relay_two));
+    assert_both_peers_use(&fleet, a, b, relay_two).await;
+
+    // And the pool no longer offers it to a device at all.
+    let config_a = fleet
+        .services
+        .build_config()
+        .execute(a)
+        .await
+        .expect("config a");
+    assert!(
+        config_a
+            .relay
+            .slots
+            .iter()
+            .all(|entry| entry.id != relay_one),
+        "a retired relay is not in the pool a device is given"
+    );
 }
 
 async fn relays(fleet: &Fleet) -> Vec<RelayId> {

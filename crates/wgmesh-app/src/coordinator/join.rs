@@ -6,7 +6,7 @@ use wgmesh_ports::coordinator::{
 use super::config::{peer_views, relay_slots};
 use super::net::{host_prefix, next_free_host};
 use super::placement::{ensure_slots, pair_with_network};
-use super::types::{JoinError, JoinOutcome, JoinPolicy, JoinRequest};
+use super::types::{JoinError, JoinOutcome, JoinPolicy, JoinRequest, PlacePolicy};
 
 /// Admit a device against a join token.
 ///
@@ -21,6 +21,9 @@ pub struct JoinDevice<'a> {
     pub reports: &'a dyn Reports,
     pub clock: &'a dyn Clock,
     pub policy: JoinPolicy,
+    /// How a pair's relay is judged still reachable, so a join cannot keep a
+    /// pair on a relay that has gone quiet.
+    pub place_policy: PlacePolicy,
 }
 
 impl JoinDevice<'_> {
@@ -98,9 +101,15 @@ impl JoinDevice<'_> {
             ensure_slots(self.directory, self.placement, &device)
                 .await
                 .map_err(map_placement)?;
-            pair_with_network(self.directory, self.placement, self.clock, &device)
-                .await
-                .map_err(map_placement)?;
+            pair_with_network(
+                self.directory,
+                self.placement,
+                self.clock,
+                self.place_policy,
+                &device,
+            )
+            .await
+            .map_err(map_placement)?;
         }
 
         self.reports

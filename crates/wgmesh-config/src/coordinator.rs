@@ -91,7 +91,10 @@ pub struct RelayAssignmentSection {
 impl Default for RelayAssignmentSection {
     fn default() -> Self {
         Self {
-            heartbeat_timeout_secs: 15,
+            // The window one heartbeat is given. A relay reports every five seconds and
+            // is re-homed after three consecutive misses, so the deadline this derives
+            // to is fifteen seconds.
+            heartbeat_timeout_secs: 5,
             reassign_after_misses: 3,
             keyset_ttl_secs: 300,
         }
@@ -132,7 +135,7 @@ mod tests {
         assert!(!settings.policy.default_auto_approve);
         assert_eq!(settings.policy.max_devices_per_network, 256);
         assert_eq!(settings.policy.join_rate_limit_per_minute, 30);
-        assert_eq!(settings.relay.heartbeat_timeout_secs, 15);
+        assert_eq!(settings.relay.heartbeat_timeout_secs, 5);
         assert_eq!(settings.relay.reassign_after_misses, 3);
         assert_eq!(settings.relay.keyset_ttl_secs, 300);
         assert_eq!(settings.log.level, LogLevel::Info);

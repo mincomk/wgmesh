@@ -7,9 +7,9 @@ use wgmesh_ports::coordinator::{
 
 use super::net::{host_prefix, parse_cidr};
 use super::placement::order;
-use super::select_relay::HEARTBEAT_GRACE;
 use super::types::{
-    ConfigError, ConfigSnapshot, MeView, PeerView, RelayPoolEntry, RelayView, SelfObservation,
+    ConfigError, ConfigSnapshot, MeView, PeerView, PlacePolicy, RelayPoolEntry, RelayView,
+    SelfObservation,
 };
 
 /// The design's `persistent-keepalive`, in seconds.
@@ -21,6 +21,7 @@ pub struct BuildConfig<'a> {
     pub placement: &'a dyn Placement,
     pub reports: &'a dyn Reports,
     pub clock: &'a dyn Clock,
+    pub policy: PlacePolicy,
 }
 
 impl BuildConfig<'_> {
@@ -41,9 +42,15 @@ impl BuildConfig<'_> {
         let slots = relay_slots(self.directory, self.placement, &record)
             .await
             .map_err(ConfigError::Store)?;
-        let assigned = assigned_relay(self.directory, self.placement, &record, self.clock)
-            .await
-            .map_err(ConfigError::Store)?;
+        let assigned = assigned_relay(
+            self.directory,
+            self.placement,
+            &record,
+            self.clock,
+            self.policy,
+        )
+        .await
+        .map_err(ConfigError::Store)?;
         let slot_port = assigned.and_then(|relay| {
             slots
                 .iter()
@@ -90,6 +97,11 @@ impl BuildConfig<'_> {
 
 /// This device's slot on every relay of its network, so a re-assignment needs
 /// no new round trip.
+///
+/// A slot is not gated on freshness, only on the relay being `Active`: it is a
+/// port the node holds open, not a path it is using, and dropping it while a
+/// relay is briefly quiet would cost exactly the round trip this list exists to
+/// avoid.
 pub(crate) async fn relay_slots(
     directory: &dyn Directory,
     placement: &dyn Placement,
@@ -121,6 +133,7 @@ pub(crate) async fn assigned_relay(
     placement: &dyn Placement,
     device: &Device,
     clock: &dyn Clock,
+    policy: PlacePolicy,
 ) -> Result<Option<RelayId>, PortError> {
     let mut peer_relays: Vec<(DeviceId, RelayId)> = Vec::new();
     let mut live: Vec<RelayId> = Vec::new();
@@ -130,10 +143,7 @@ pub(crate) async fn assigned_relay(
         if relay.state != RelayState::Active {
             continue;
         }
-        let fresh = !relay.draining
-            && relay
-                .last_heartbeat_at
-                .is_some_and(|seen| now.0.saturating_sub(seen.0) <= HEARTBEAT_GRACE.0);
+        let fresh = !relay.draining && policy.is_fresh(relay.last_heartbeat_at, now);
         if fresh {
             live.push(relay.id);
         }
