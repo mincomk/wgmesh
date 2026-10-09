@@ -2797,9 +2797,11 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wgmesh-app",
+ "wgmesh-client",
  "wgmesh-config",
  "wgmesh-core",
  "wgmesh-ports",
+ "wgmesh-proto",
  "wgmesh-secrets",
  "wgmesh-state",
 ]
@@ -2916,7 +2918,11 @@ version = "0.1.0"
 dependencies = [
  "socket2",
  "tokio",
+ "wgmesh-client",
  "wgmesh-core",
+ "wgmesh-ports",
+ "wgmesh-proto",
+ "wgmesh-secrets",
 ]
 
 [[package]]

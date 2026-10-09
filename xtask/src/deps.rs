@@ -120,11 +120,15 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "clap",
         ],
     ),
+    // The relay's row gains `wgmesh-ports`: a relay is a principal with a key of its own, and the
+    // client it now uses signs through that crate's `SecretStore`. The same crate's `Clock` is how
+    // a request is stamped, so the port is nameable where the adapter is written.
     (
         "wgmesh-relay",
         &[
             "wgmesh-core",
             "wgmesh-app",
+            "wgmesh-ports",
             "wgmesh-proto",
             "wgmesh-config",
             "wgmesh-state",

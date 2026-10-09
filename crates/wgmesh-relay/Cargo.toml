@@ -16,5 +16,9 @@ path = "src/main.rs"
 
 [dependencies]
 wgmesh-core = { path = "../wgmesh-core" }
+wgmesh-secrets = { path = "../wgmesh-secrets" }
+wgmesh-ports = { path = "../wgmesh-ports" }
+wgmesh-proto = { path = "../wgmesh-proto" }
+wgmesh-client = { path = "../wgmesh-client" }
 socket2 = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
