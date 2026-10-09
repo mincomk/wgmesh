@@ -483,10 +483,11 @@ impl RelayTable {
             return Route::Drop(DropReason::UnknownIngress);
         };
         let stale = at.elapsed_since(entry.last_seen) > SOURCE_PIN_WINDOW;
-        if let Some(known) = entry.pinned_src {
-            if known != source && !stale {
-                return Route::Drop(DropReason::SourceMoved);
-            }
+        if let Some(known) = entry.pinned_src
+            && known != source
+            && !stale
+        {
+            return Route::Drop(DropReason::SourceMoved);
         }
         entry.pinned_src = Some(source);
         entry.last_seen = at;
