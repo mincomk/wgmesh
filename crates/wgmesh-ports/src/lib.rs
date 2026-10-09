@@ -29,7 +29,9 @@
 
 pub mod coordinator;
 pub mod fake;
+pub mod prefix;
 pub mod routes;
+pub mod routing;
 pub mod stores;
 pub mod wireguard;
 
@@ -39,7 +41,12 @@ pub use coordinator::{
     ConfigSnapshot, CoordinatorApi, EnrollRequest, Enrollment, JoinToken, Observation,
     PunchOutcome, PunchReport, RelayAssignment,
 };
+pub use prefix::{MARKER_PROTO, family_flag, format_prefix, is_catch_all, parse_prefix};
 pub use routes::Routes;
+pub use routing::{
+    ChangeAction, Firewall, ForwardingPolicy, NamedPeer, PeerReport, RouteChangeView,
+    RoutePlanView, Sysctl, reset_routes,
+};
 pub use stores::{
     Clock, CoordinatorLink, PeerRecord, PersistedState, RelayState, SecretStore, Signature, Spki,
     StateStore,

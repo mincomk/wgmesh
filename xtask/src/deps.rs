@@ -114,13 +114,12 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
             "wgmesh-coordinator",
             "wgmesh-relay",
         ],
-        // The blueprint's section 1.1 row for the composition root names `clap`, `tokio` and
-        // `tracing-subscriber`. This row is that plus the crates the root itself needs: `serde`
-        // and `serde_json`, because a command's contract is a document it prints; `async-trait`,
-        // because the root implements `wgmesh-ports`' asynchronous coordinator port and the macro
-        // has to be nameable where the implementation is; and `tracing`, because the daemon's
-        // loop logs what it could not do. A tighter row would push the printing of a command's
-        // own contract into a crate that does not hold the contract.
+        // Section 1.1 names `clap`, `tokio` and `tracing-subscriber` for the composition root.
+        // Two of the extra crates here were already the row's before this branch — `serde` and
+        // `serde_json`, because a command's contract is a document it prints. This branch adds
+        // `async-trait`, because the root implements `wgmesh-ports`' asynchronous coordinator port
+        // and the macro has to be nameable where the implementation is, and `tracing`, because the
+        // daemon's loop logs what it could not do.
         &[
             "async-trait",
             "clap",
