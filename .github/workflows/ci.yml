@@ -1,0 +1,49 @@
+name: CI
+
+# Two of section 16's CI steps are deliberately not here yet. `cargo deny check
+# licenses bans` has no license or bans configuration to read until the workspace
+# has one. The two `nix build .#checks.x86_64-linux.*` steps have nothing to build
+# until `nix/` exists. Both join this workflow with the work that gives them
+# something to check.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: fmt, clippy, test, checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - name: Dependency rules
+        run: cargo xtask check-deps
+
+      - name: Style rules
+        run: cargo xtask check-style

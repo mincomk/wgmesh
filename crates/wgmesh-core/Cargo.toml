@@ -1,0 +1,13 @@
+[package]
+name = "wgmesh-core"
+description = "Pure domain core: mac1, hole-punch state machine, relay routing, allowed-ips and route planning."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+blake2 = "0.11"

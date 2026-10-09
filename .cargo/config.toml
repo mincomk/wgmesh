@@ -1,0 +1,5 @@
+# `cargo xtask <task>` runs the workspace's own repository checks.
+# The checks live in the `xtask` crate so that a reviewer does not have to
+# remember them, and CI calls exactly what a developer calls.
+[alias]
+xtask = "run --quiet --package xtask --"

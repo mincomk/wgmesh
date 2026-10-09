@@ -1,0 +1,28 @@
+[package]
+name = "wgmesh-cli"
+description = "The wgmesh binary: the composition root that wires every adapter to the use cases."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+autobins = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "wgmesh"
+path = "src/main.rs"
+
+[dependencies]
+wgmesh-core = { path = "../wgmesh-core" }
+wgmesh-ports = { path = "../wgmesh-ports" }
+wgmesh-app = { path = "../wgmesh-app" }
+wgmesh-config = { path = "../wgmesh-config" }
+wgmesh-state = { path = "../wgmesh-state" }
+wgmesh-secrets = { path = "../wgmesh-secrets" }
+wgmesh-proto = { path = "../wgmesh-proto" }
+wgmesh-wireguard = { path = "../wgmesh-wireguard" }
+wgmesh-client = { path = "../wgmesh-client" }
+wgmesh-coordinator = { path = "../wgmesh-coordinator" }
+wgmesh-relay = { path = "../wgmesh-relay" }
