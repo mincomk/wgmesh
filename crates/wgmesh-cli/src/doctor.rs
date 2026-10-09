@@ -72,12 +72,54 @@ pub trait Sysctl {
     fn read(&self, key: &str) -> Option<bool>;
 }
 
-/// The real thing: `/proc/sys`.
-pub struct ProcSysctl;
+/// The real thing: `/proc/sys`, under a root that can be moved.
+///
+/// The root exists so a test — or an operator diagnosing a chroot or an image —
+/// can point the forwarding check at a tree that is not this machine's. It is
+/// the same port either way; only where it reads from moves.
+#[derive(Clone, Debug)]
+pub struct ProcSysctl {
+    root: std::path::PathBuf,
+}
+
+impl ProcSysctl {
+    /// This machine's `/proc/sys`.
+    pub fn new() -> Self {
+        Self::rooted(PROC_SYS)
+    }
+
+    /// A directory to read the same keys from, in place of this machine's
+    /// `/proc/sys`.
+    pub fn rooted(root: impl Into<std::path::PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// Where this reader looks.
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+}
+
+impl Default for ProcSysctl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The directory the default reader reads: this machine's kernel settings.
+pub const PROC_SYS: &str = "/proc/sys";
 
 impl Sysctl for ProcSysctl {
     fn read(&self, key: &str) -> Option<bool> {
-        let text = std::fs::read_to_string(key).ok()?;
+        // The keys are absolute paths under `/proc/sys`; the root replaces that
+        // prefix rather than being prepended to it, so `--proc-root /tmp/p` reads
+        // `/proc/sys/net/ipv4/ip_forward` out of `/tmp/p/net/ipv4/ip_forward`.
+        let relative = key
+            .strip_prefix(PROC_SYS)
+            .unwrap_or_else(|| key.trim_start_matches('/'))
+            .trim_start_matches('/');
+        let path = self.root.join(relative);
+        let text = std::fs::read_to_string(path).ok()?;
         match text.trim() {
             "1" => Some(true),
             "0" => Some(false),
