@@ -2157,6 +2157,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "wgmesh-metrics"
+version = "0.1.0"
+
+[[package]]
 name = "wgmesh-ports"
 version = "0.1.0"
 dependencies = [

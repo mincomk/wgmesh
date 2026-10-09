@@ -9,7 +9,13 @@ use blake2::digest::consts::U16;
 use blake2::digest::{Digest, KeyInit, Mac, Update};
 use blake2::{Blake2s256, Blake2sMac};
 
+pub mod doctor;
+pub mod natprobe;
+pub mod rate;
 pub mod route;
+pub use doctor::*;
+pub use natprobe::*;
+pub use rate::*;
 pub use route::*;
 
 const LABEL_MAC1: &[u8] = b"mac1----";
