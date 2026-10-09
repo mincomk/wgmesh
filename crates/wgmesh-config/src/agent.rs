@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+use std::time::Duration;
+
+use wgmesh_core::{DiscoveryPolicy, TraversalConfig};
+
 use crate::route::{AllowedIpsSetting, FirewallSetting, RelayPoolSetting, RouteSection};
 use crate::{Layers, LogSection, StateSection};
 
@@ -157,6 +161,67 @@ impl Default for TraversalSection {
     }
 }
 
+/// How long a NAT-PMP or UPnP mapping is asked to live.
+///
+/// Long enough that it outlives the keepalives refreshing it - 120 of them - and
+/// no longer than the hour that gateways in the field most commonly honour.
+fn mapping_lifetime(keepalive_secs: u64) -> Duration {
+    Duration::from_secs(keepalive_secs.max(1).saturating_mul(120).min(3600))
+}
+
+impl TraversalSection {
+    /// The timings as `wgmesh-core`'s state machine wants them.
+    ///
+    /// The core owns the shape of the retreat - a bounded list of waits - and the
+    /// file owns the numbers, so this is a translation and not a second decision.
+    /// A file with an empty `backoff_secs` fails validation rather than reaching
+    /// here; `wgmesh_core`'s own default is what a caller gets when the list runs
+    /// out.
+    pub fn traversal_config(&self) -> TraversalConfig {
+        TraversalConfig {
+            punch_delay: Duration::from_secs(self.punch_delay_secs),
+            punch_window: Duration::from_secs(self.punch_window_secs),
+            backoff: self
+                .backoff_secs
+                .iter()
+                .map(|secs| Duration::from_secs(*secs))
+                .collect(),
+        }
+    }
+
+    /// Which candidate classes this node may derive for itself.
+    ///
+    /// `lan_candidates` and `ipv6` switch off the two classes a node produces
+    /// from its own interfaces. They do not switch off the relay-observed address
+    /// or the relay itself: those are the path both sides agree on and the
+    /// fallback, and the core has no policy field for either.
+    pub fn discovery_policy(&self) -> DiscoveryPolicy {
+        DiscoveryPolicy {
+            lan_candidates: self.lan_candidates,
+            ipv6: self.ipv6,
+        }
+    }
+
+    /// Whether NAT-PMP and UPnP-IGD may be spoken to at all.
+    ///
+    /// Off by default and off means off: the agent does not call the port mapper,
+    /// so no request is made to the router. A mapping is an opportunistic extra
+    /// candidate, never a prerequisite for the traversal.
+    pub fn upnp_enabled(&self) -> bool {
+        self.upnp
+    }
+
+    /// How long a mapping is asked to live, when one is asked for.
+    pub fn mapping_lifetime(&self) -> Duration {
+        mapping_lifetime(self.keepalive_secs)
+    }
+
+    /// The persistent keepalive every peer of this mesh is given.
+    pub fn keepalive(&self) -> Duration {
+        Duration::from_secs(self.keepalive_secs)
+    }
+}
+
 /// The `[relay]` table of the agent: which relays it accepts.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -214,5 +279,75 @@ mod tests {
         assert_eq!(settings.state.dir.to_string_lossy(), "/var/lib/wgmesh");
         assert_eq!(settings.log.level, crate::LogLevel::Info);
         assert_eq!(settings.log.format, crate::LogFormat::Text);
+    }
+
+    /// The file is the only place these three are decided. The agent's own
+    /// defaults have to agree with the file's, or a device that never wrote a
+    /// config would behave differently from one that did.
+    #[test]
+    fn the_candidate_switches_default_to_upnp_off_and_both_local_classes_on() {
+        let traversal = TraversalSection::default();
+        assert!(
+            !traversal.upnp_enabled(),
+            "off means the router is never spoken to, so off has to be the default"
+        );
+        assert_eq!(
+            traversal.discovery_policy(),
+            DiscoveryPolicy {
+                lan_candidates: true,
+                ipv6: true
+            }
+        );
+    }
+
+    #[test]
+    fn the_traversal_timings_carry_into_the_cores_own_shape() {
+        let config = TraversalSection::default().traversal_config();
+        assert_eq!(config, TraversalConfig::default());
+        assert_eq!(config.punch_window, Duration::from_secs(5));
+        assert_eq!(
+            config.backoff,
+            vec![
+                Duration::from_secs(30),
+                Duration::from_secs(120),
+                Duration::from_secs(600)
+            ],
+            "30 seconds, then 2 minutes, then 10 minutes"
+        );
+        assert_eq!(
+            TraversalSection::default().keepalive(),
+            Duration::from_secs(25)
+        );
+    }
+
+    #[test]
+    fn a_file_that_switches_a_class_off_carries_that_decision_to_the_policy() {
+        let traversal = TraversalSection {
+            lan_candidates: false,
+            upnp: true,
+            ..TraversalSection::default()
+        };
+        let policy = traversal.discovery_policy();
+        assert!(!policy.lan_candidates);
+        assert!(policy.ipv6, "one switch does not move the other");
+        assert!(traversal.upnp_enabled());
+    }
+
+    #[test]
+    fn a_mapping_outlives_the_keepalives_that_refresh_it_without_exceeding_an_hour() {
+        assert_eq!(
+            TraversalSection::default().mapping_lifetime(),
+            Duration::from_secs(3000),
+            "120 keepalives at the default 25s"
+        );
+        assert_eq!(
+            TraversalSection {
+                keepalive_secs: 300,
+                ..TraversalSection::default()
+            }
+            .mapping_lifetime(),
+            Duration::from_secs(3600),
+            "and a slow keepalive does not ask for more than gateways honour"
+        );
     }
 }

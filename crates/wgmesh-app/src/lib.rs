@@ -11,8 +11,12 @@ pub mod agent;
 pub mod doctor;
 pub mod routes;
 
+pub use agent::discovery::{CandidateDiscovery, Discovery};
 pub use agent::effect::{Effect, dispatch, dispatch_all};
 pub use agent::error::AppError;
+pub use agent::traversal::{
+    DEFAULT_KEEPALIVE, HANDSHAKE_DEADLINE, PeerTraversal, TraversalRunner, degraded,
+};
 pub use agent::{
     Agent, AgentSettings, ConvergeState, Convergence, EnrollDevice, Ports, Startup, TraversePeers,
 };

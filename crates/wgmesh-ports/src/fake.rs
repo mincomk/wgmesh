@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
@@ -29,8 +29,9 @@ use wgmesh_core::{
 };
 
 use crate::{
-    ApiError, Clock, ConfigSnapshot, CoordinatorApi, EnrollRequest, Enrollment, InterfaceSpec,
-    Observation, PeerStatus, PersistedState, PortError, PunchReport, RouteError, SecretError,
+    AddressScope, ApiError, Clock, ConfigSnapshot, CoordinatorApi, DiscoveryError, EnrollRequest,
+    Enrollment, InterfaceInventory, InterfaceSpec, LocalAddress, MappedPort, Observation,
+    PeerStatus, PersistedState, PortError, PortMapper, PunchReport, RouteError, SecretError,
     SecretStore, Signature, Spki, StateError, StateStore, WireGuard, WireGuardError,
 };
 
@@ -622,4 +623,114 @@ pub fn endpoint(port: u16) -> Endpoint {
         std::net::IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 7)),
         port,
     ))
+}
+
+/// The addresses a node holds, held in memory.
+///
+/// It can be told to fail, because the interesting behaviour is not what happens
+/// when an interface is readable — it is that an unreadable one does not silently
+/// look like a node with no addresses.
+pub struct FakeInventory {
+    addresses: Mutex<Vec<LocalAddress>>,
+    listen_port: Mutex<u16>,
+    failure: Mutex<Option<PortError>>,
+}
+
+impl FakeInventory {
+    /// An inventory holding `addresses`, listening on `listen_port`.
+    pub fn new(addresses: Vec<LocalAddress>, listen_port: u16) -> Self {
+        Self {
+            addresses: Mutex::new(addresses),
+            listen_port: Mutex::new(listen_port),
+            failure: Mutex::new(None),
+        }
+    }
+
+    /// A private address, in the candidate class that never leaves the wire.
+    pub fn lan(ip: std::net::IpAddr) -> LocalAddress {
+        LocalAddress::new(ip, AddressScope::Lan)
+    }
+
+    /// A global IPv6 address, in the class that has no translation in front of it.
+    pub fn ipv6(ip: std::net::IpAddr) -> LocalAddress {
+        LocalAddress::new(ip, AddressScope::Ipv6Global)
+    }
+
+    /// Replace the addresses the inventory reports.
+    pub fn set_addresses(&self, addresses: Vec<LocalAddress>) {
+        *locked(&self.addresses) = addresses;
+    }
+
+    /// Make every call fail with this error until `clear_failure`.
+    pub fn fail_with(&self, error: PortError) {
+        *locked(&self.failure) = Some(error);
+    }
+
+    /// Stop failing.
+    pub fn clear_failure(&self) {
+        *locked(&self.failure) = None;
+    }
+
+    fn check(&self) -> Result<(), DiscoveryError> {
+        match locked(&self.failure).as_ref() {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+}
+
+impl InterfaceInventory for FakeInventory {
+    fn addresses(&self) -> Result<Vec<LocalAddress>, DiscoveryError> {
+        self.check()?;
+        Ok(locked(&self.addresses).clone())
+    }
+
+    fn listen_port(&self) -> Result<u16, DiscoveryError> {
+        self.check()?;
+        Ok(*locked(&self.listen_port))
+    }
+}
+
+/// A gateway that records what it was asked and answers what it was told.
+///
+/// `calls` is the point of the fake. The claim being tested is that an operator
+/// who left `traversal.upnp` off never has this node speak NAT-PMP or UPnP to
+/// anyone, and the only way to test "never" is to count the calls.
+#[derive(Clone)]
+pub struct RecordingPortMapper {
+    answer: Option<Endpoint>,
+    calls: Arc<Mutex<Vec<(u16, Duration)>>>,
+}
+
+impl RecordingPortMapper {
+    /// A gateway that answers with `answer`, or fails if there is none.
+    pub fn new(answer: Option<Endpoint>) -> Self {
+        Self {
+            answer,
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// How many mapping requests reached the gateway.
+    pub fn calls(&self) -> usize {
+        locked(&self.calls).len()
+    }
+
+    /// Every request that reached the gateway, as the port and lifetime it named.
+    pub fn call_log(&self) -> Vec<(u16, Duration)> {
+        locked(&self.calls).clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl PortMapper for RecordingPortMapper {
+    async fn map(&self, local_port: u16, lifetime: Duration) -> Result<MappedPort, DiscoveryError> {
+        locked(&self.calls).push((local_port, lifetime));
+        match self.answer {
+            Some(endpoint) => Ok(MappedPort::new(endpoint)),
+            None => Err(PortError::recoverable(
+                "the gateway does not speak NAT-PMP or UPnP-IGD",
+            )),
+        }
+    }
 }
