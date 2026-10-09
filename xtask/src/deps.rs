@@ -56,7 +56,10 @@ const ALLOWED: &[(&str, &[&str], &[&str])] = &[
     (
         "wgmesh-wireguard",
         &["wgmesh-core", "wgmesh-ports"],
-        &["rtnetlink", "nl-wireguard", "tokio"],
+        // `futures-util` is here because `rtnetlink` hands its result sets back
+        // as `impl Stream` and re-exports no way to drive one; borrowing
+        // `StreamExt` is cheaper than re-implementing the poll.
+        &["rtnetlink", "nl-wireguard", "tokio", "futures-util"],
     ),
     (
         "wgmesh-client",
