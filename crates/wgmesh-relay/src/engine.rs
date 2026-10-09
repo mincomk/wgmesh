@@ -194,6 +194,10 @@ pub struct RelayEngine<S: SlotSockets> {
     batch: BTreeMap<DeviceId, Traffic>,
     counters: Counters,
     draining: bool,
+    // The pairs the relay was carrying when drain began. A draining relay stops taking
+    // *new* pairs and keeps serving these until the coordinator moves them away, which is
+    // what makes `drain` a handover rather than an outage.
+    draining_pairs: Option<BTreeSet<(DeviceId, DeviceId)>>,
     started_at: Millis,
     last_report: Option<Millis>,
     pending: Vec<Report>,
@@ -217,6 +221,7 @@ impl<S: SlotSockets> RelayEngine<S> {
             batch: BTreeMap::new(),
             counters: Counters::default(),
             draining: false,
+            draining_pairs: None,
             started_at: Millis::ZERO,
             last_report: None,
             pending: Vec::new(),
@@ -278,8 +283,36 @@ impl<S: SlotSockets> RelayEngine<S> {
         self.draining
     }
 
+    /// Start or stop draining. Starting one snapshots the pairs the relay is carrying:
+    /// those keep working, and anything assigned after this moment is refused, so the
+    /// coordinator can hand the pairs over without the maintenance window becoming an
+    /// outage. Stopping clears the snapshot and the relay takes pairs again.
     pub fn set_draining(&mut self, draining: bool) {
+        if draining == self.draining {
+            return;
+        }
         self.draining = draining;
+        if draining {
+            self.draining_pairs = Some(self.assigned_pair_set());
+        } else {
+            self.draining_pairs = None;
+        }
+    }
+
+    /// Whether `(from, to)` is one of the pairs this relay was already carrying when
+    /// drain began.
+    pub fn carries_while_draining(&self, from: DeviceId, to: DeviceId) -> bool {
+        match &self.draining_pairs {
+            None => true,
+            Some(pairs) => pairs.contains(&(from, to)) || pairs.contains(&(to, from)),
+        }
+    }
+
+    fn assigned_pair_set(&self) -> BTreeSet<(DeviceId, DeviceId)> {
+        self.applied_pairs
+            .iter()
+            .map(|pair| (DeviceId(pair.device_a), DeviceId(pair.device_b)))
+            .collect()
     }
 
     // Applies a fresh slot table, pair set and keyset without a restart. An identical
@@ -357,6 +390,14 @@ impl<S: SlotSockets> RelayEngine<S> {
             table.assign_pair(a, b);
             pair_of.insert(a, b);
             pair_of.insert(b, a);
+        }
+
+        // A pair the coordinator has moved away stops being one this relay is draining:
+        // the snapshot only ever shrinks, so a drain finishes instead of holding onto
+        // pairs that no longer exist.
+        let assigned: BTreeSet<(DeviceId, DeviceId)> = self.assigned_pair_set();
+        if let Some(pairs) = self.draining_pairs.as_mut() {
+            pairs.retain(|pair| assigned.contains(pair));
         }
 
         self.table = table;
@@ -441,7 +482,7 @@ impl<S: SlotSockets> RelayEngine<S> {
             return self.drop_out(Drop::from_core(reason));
         };
 
-        if self.draining {
+        if self.draining && !self.carries_while_draining(origin, to) {
             return self.drop_out(Drop::Draining);
         }
         // An expired keyset stops new deliveries either way: a destination the frozen

@@ -42,7 +42,7 @@ COMMANDS:
     enroll    Generate the relay key and reach for the coordinator
     run       Serve the slot sockets and forward between the assigned pairs
     status    Print the running relay's last status snapshot
-    drain     Ask the running relay to stop taking new traffic (--off to resume)
+    drain     Stop taking new pairs and hand over what it is carrying (--off to resume)
     keyset    Show the keyset the relay is serving, or ask it to refresh (--refresh)
 
 OPTIONS:
@@ -656,7 +656,10 @@ fn drain(flags: &Flags, state_dir: &Path) -> Result<(), String> {
     }
     fs::write(&path, b"drain\n").map_err(|error| format!("{}: {error}", path.display()))?;
     println!("drain requested  {}", path.display());
-    println!("a running relay stops taking new traffic within one poll of the flag");
+    println!(
+        "a running relay stops taking new pairs within one poll of the flag; the pairs it \
+         already carries keep working until the coordinator moves them elsewhere"
+    );
     Ok(())
 }
 

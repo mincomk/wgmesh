@@ -547,21 +547,84 @@ fn the_slot_rate_limit_drops_the_excess() {
 }
 
 #[test]
-fn draining_stops_forwarding() {
+fn draining_hands_the_pairs_over_instead_of_cutting_them() {
     let mut fixture = fixture_at(Millis::from_millis(1_000));
     let at = Millis::from_millis(1_100);
-    fixture.engine.set_draining(true);
 
+    // The pair is already carrying traffic when the operator drains the relay.
+    fixture.engine.set_draining(true);
     fixture.a.send(address(fixture.a_port), &transport(64));
     pump_until(&mut fixture.engine, at, 1);
 
-    assert_eq!(fixture.engine.counters().drops.draining, 1);
-    assert!(fixture.b.recv_within(SHORT).is_none());
+    // It keeps working. Taking the pair off this relay is the coordinator's job, and
+    // doing it that way is what keeps a maintenance window from becoming an outage.
+    assert_eq!(fixture.engine.counters().drops.draining, 0);
+    assert!(fixture.b.recv_within(LONG).is_some());
+    assert!(fixture.engine.is_draining());
 
+    // Clearing the drain puts the relay back to normal.
     fixture.engine.set_draining(false);
     fixture.a.send(address(fixture.a_port), &transport(64));
     pump_until(&mut fixture.engine, at, 1);
     assert!(fixture.b.recv_within(LONG).is_some());
+}
+
+#[test]
+fn a_draining_relay_refuses_a_pair_it_was_not_already_carrying() {
+    let at = Millis::from_millis(1_000);
+    let mut engine = engine_with(test_config());
+    engine
+        .on_assignment(assignment(&[1, 2, 3, 4], &[(1, 2)], &[1, 2, 3, 4]), at)
+        .unwrap();
+    let a_port = engine.slot_port(DeviceId(1)).unwrap();
+    let b_port = engine.slot_port(DeviceId(2)).unwrap();
+    let c_port = engine.slot_port(DeviceId(3)).unwrap();
+    let d_port = engine.slot_port(DeviceId(4)).unwrap();
+    let a = Peer::bind();
+    let b = Peer::bind();
+    let c = Peer::bind();
+    let d = Peer::bind();
+
+    b.send(address(b_port), &transport(64));
+    pump_until(&mut engine, at, 1);
+    a.send(address(a_port), &transport(64));
+    pump_until(&mut engine, at, 1);
+    assert!(
+        b.recv_within(LONG).is_some(),
+        "the pair is carrying traffic"
+    );
+
+    engine.set_draining(true);
+
+    // A pair assigned after the drain began is not this relay's to take. Both sides are
+    // live -- the refusal is the drain, not an unknown destination. A pair-set change
+    // rebuilds the routing table, so both sides announce themselves again, exactly as
+    // they do after a re-assignment.
+    let later = at.plus(Duration::from_millis(200));
+    engine
+        .on_assignment(
+            assignment(&[1, 2, 3, 4], &[(1, 2), (3, 4)], &[1, 2, 3, 4]),
+            later,
+        )
+        .unwrap();
+    d.send(address(d_port), &transport(64));
+    pump_until(&mut engine, later, 1);
+    b.send(address(b_port), &transport(64));
+    pump_until(&mut engine, later, 1);
+
+    c.send(address(c_port), &transport(64));
+    pump_until(&mut engine, later, 1);
+
+    assert_eq!(engine.counters().drops.draining, 1);
+    assert!(
+        d.recv_within(SHORT).is_none(),
+        "a draining relay takes no new pairs"
+    );
+
+    // The pair it was already carrying is served throughout.
+    a.send(address(a_port), &transport(64));
+    pump_until(&mut engine, later, 1);
+    assert!(b.recv_within(LONG).is_some());
 }
 
 #[test]
