@@ -187,15 +187,23 @@ async fn run() -> Result<(), String> {
     match cli.command {
         Command::Run { listen } => {
             let services = Services::new(store, clock);
+            // The configuration watch lives as long as the daemon does.
+            let _watch = wgmesh_coordinator::http::watch_config(services.clone());
             let app = router(services);
             let address: SocketAddr = listen.parse().map_err(|error| format!("{error}"))?;
             let listener = TcpListener::bind(address)
                 .await
                 .map_err(|error| error.to_string())?;
             println!("wgmeshd listening on http://{address}");
-            axum::serve(listener, app)
-                .await
-                .map_err(|error| error.to_string())?;
+            // The peer address is what the per-address limiter on the two
+            // unauthenticated routes is built from, so the service has to
+            // carry it.
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
         }
         Command::Bootstrap {
             network,
