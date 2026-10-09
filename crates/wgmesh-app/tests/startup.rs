@@ -15,7 +15,7 @@ use wgmesh_core::{
 };
 use wgmesh_ports::fake::{
     FakeCoordinator, FakeRoutes, FakeSecrets, FakeWireGuard, ManualClock, RecordingState, block_on,
-    endpoint as ep,
+    endpoint as ep, peer_record,
 };
 use wgmesh_ports::{
     Class, InterfaceSpec, JoinToken, Observation, PeerStatus, PersistedState, PortError, Spki,
@@ -180,9 +180,15 @@ fn a_start_enrolls_converges_and_reaches_the_kernel() {
         ]
     );
 
-    // The peers the device remembers are the ones it just programmed.
+    // The peers the device remembers are the ones it just programmed, and the handshake time it
+    // remembers is the one the kernel reported rather than a default.
     let remembered: Vec<DeviceId> = startup.state.peers.iter().map(|peer| peer.device).collect();
     assert_eq!(remembered, vec![DeviceId(1), DeviceId(3)]);
+    assert_eq!(
+        startup.state.peers[0].last_handshake,
+        Some(Millis::from_secs(900)),
+        "the kernel's last handshake reached the state"
+    );
 }
 
 /// A pin that disagrees with the configuration stops the work, and only `trust --rotate` moves it.
@@ -408,7 +414,7 @@ fn the_traversal_state_machine_drives_the_kernel() {
 /// A default route never reaches the kernel, and the configuration that asks for one aborts
 /// before the interface is touched at all.
 #[test]
-fn a_default_route_is_refused_before_anything_reaches_the_kernel() {
+fn a_default_route_is_refused_before_any_change_reaches_the_kernel() {
     let fixture = Fixture::new();
     fixture.coordinator.set_peers(vec![peer(1, 9101)]);
     fixture
@@ -425,6 +431,10 @@ fn a_default_route_is_refused_before_anything_reaches_the_kernel() {
     assert!(
         fixture.wireguard.applied().is_empty(),
         "the refusal came before the peers were programmed"
+    );
+    assert!(
+        fixture.wireguard.held().is_empty(),
+        "and no peer reached the interface either"
     );
 }
 
@@ -515,16 +525,37 @@ fn a_second_convergence_is_a_no_op() {
     );
 }
 
-/// An endpoint in the state that the kernel does not have is not invented as a peer.
+/// The kernel is the authority on what the kernel holds, not the state file.
 #[test]
 fn the_kernel_is_the_authority_on_what_it_holds() {
     let fixture = Fixture::new();
     fixture.coordinator.set_peers(vec![peer(1, 9101)]);
-    // The interface knows nothing, so the desired peer is an addition, not an update.
+
+    // The state remembers peer 1 as configured, but the interface holds nothing — a rebuilt
+    // interface, or a state file restored from a backup. A converge that trusted the state would
+    // conclude there was nothing to do; one that asks the kernel produces the addition.
+    let mut remembered = PersistedState::enrolled(
+        DeviceId(7),
+        "test-net",
+        Allowed::V4([10, 77, 0, 7], 16),
+        spki(1),
+        Millis::ZERO,
+    );
+    remembered.peers.push(peer_record(
+        DeviceId(1),
+        Allowed::V4([10, 77, 0, 1], 32),
+        Millis::from_secs(10),
+    ));
+    fixture
+        .state
+        .save(&remembered)
+        .expect("seed a state that disagrees with the kernel");
+
     block_on(fixture.agent().start()).expect("the agent starts");
     assert_eq!(
         fixture.wireguard.applied(),
-        vec![Change::Add(peer(1, 9101))]
+        vec![Change::Add(peer(1, 9101))],
+        "the desired peer is an addition, because the kernel does not hold it"
     );
 
     let pinned: Vec<Endpoint> = fixture

@@ -467,14 +467,15 @@ impl StateStore for RecordingState {
 /// reached the store, that the same message produces the same result, and that the private half
 /// is never handed out at all.
 pub struct FakeSecrets {
-    wg: PublicKey,
-    api: PublicKey,
+    seed: u8,
     audit: Mutex<SecretAudit>,
 }
 
 #[derive(Default)]
 struct SecretAudit {
     generations: usize,
+    wg: Option<PublicKey>,
+    api: Option<PublicKey>,
     lookups: usize,
     signed: Vec<Vec<u8>>,
 }
@@ -483,13 +484,16 @@ impl FakeSecrets {
     /// A store that holds no key yet and mints one on the first look.
     pub fn new(seed: u8) -> Self {
         Self {
-            wg: PublicKey::from_bytes([seed; 32]),
-            api: PublicKey::from_bytes([seed.wrapping_add(1); 32]),
+            seed,
             audit: Mutex::new(SecretAudit::default()),
         }
     }
 
-    /// How many times a key was minted. Zero or one, unless something is wrong.
+    /// How many times a key pair was minted.
+    ///
+    /// This is a real count, not a flag: each mint produces a *different* pair, so a device that
+    /// re-minted would present a different public key, and a test that says the keys were reused
+    /// is saying something.
     pub fn generations(&self) -> usize {
         locked(&self.audit).generations
     }
@@ -505,25 +509,37 @@ impl FakeSecrets {
     }
 }
 
+/// The stored key pair, minting one if the store holds none.
+fn keys(audit: &mut SecretAudit, seed: u8) -> (PublicKey, PublicKey) {
+    if audit.wg.is_none() || audit.api.is_none() {
+        audit.generations += 1;
+        let generation = audit.generations as u8;
+        audit.wg = Some(PublicKey::from_bytes([seed.wrapping_add(generation); 32]));
+        let api_seed = seed.wrapping_add(generation).wrapping_add(1);
+        audit.api = Some(PublicKey::from_bytes([api_seed; 32]));
+    }
+    let zero = PublicKey::from_bytes([0u8; 32]);
+    (audit.wg.unwrap_or(zero), audit.api.unwrap_or(zero))
+}
+
 impl SecretStore for FakeSecrets {
     fn wireguard_public_key(&self) -> Result<PublicKey, SecretError> {
         let mut audit = locked(&self.audit);
         audit.lookups += 1;
-        if audit.generations == 0 {
-            audit.generations = 1;
-        }
-        Ok(self.wg)
+        Ok(keys(&mut audit, self.seed).0)
     }
 
     fn public_key(&self) -> Result<PublicKey, SecretError> {
-        locked(&self.audit).lookups += 1;
-        Ok(self.api)
+        let mut audit = locked(&self.audit);
+        audit.lookups += 1;
+        Ok(keys(&mut audit, self.seed).1)
     }
 
     fn sign(&self, message: &[u8]) -> Result<Signature, SecretError> {
         let mut audit = locked(&self.audit);
         audit.signed.push(message.to_vec());
-        Ok(Signature::from_bytes(digest(self.api.as_bytes(), message)))
+        let (_, api) = keys(&mut audit, self.seed);
+        Ok(Signature::from_bytes(digest(api.as_bytes(), message)))
     }
 }
 
