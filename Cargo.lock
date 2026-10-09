@@ -2419,6 +2419,7 @@ dependencies = [
  "base64",
  "clap",
  "ed25519-dalek 2.2.0",
+ "http-body-util",
  "serde_json",
  "sqlx",
  "tempfile",

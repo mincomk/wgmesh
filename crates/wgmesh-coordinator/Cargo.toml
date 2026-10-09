@@ -32,6 +32,7 @@ serde_json = "1"
 
 [dev-dependencies]
 base64 = "0.22"
+http-body-util = "0.1"
 # The failover test drives real relays over loopback UDP: the coordinator's decision is
 # only worth anything if the pair it re-homes actually crosses the relay it named.
 wgmesh-relay = { path = "../wgmesh-relay" }
