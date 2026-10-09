@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 // The use cases. Knows `wgmesh-core` and `wgmesh-ports`, and nothing else.
 //
 // The agent decides nothing itself: every judgement — which candidates to try, what to add or
@@ -12,3 +14,5 @@ pub use agent::error::AppError;
 pub use agent::{
     Agent, AgentSettings, ConvergeState, Convergence, EnrollDevice, Ports, Startup, TraversePeers,
 };
+
+pub mod coordinator;

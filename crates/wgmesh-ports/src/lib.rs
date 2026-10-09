@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 // The traits the use cases depend on, and the error taxonomy they speak.
 //
 // Everything the agent does is either a pure decision — which lives in `wgmesh-core`, and
